@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Rule 1 of Fortress Rules)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Reusable Global Primitive Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // 2. Validation Blueprints (Rule 2 of Fortress Rules)
+    function isValidUserProfile(data) {
+      return data.uid is string 
+        && data.uid.size() <= 128
+        && data.uid == request.auth.uid
+        && data.fullName is string
+        && data.fullName.size() >= 2
+        && data.fullName.size() <= 100
+        && data.email is string
+        && data.email.size() <= 128
+        && data.role is string
+        && (data.role == 'farmer' || data.role == 'consumer');
+    }
+
+    function isValidUserAction(data) {
+      return data.id is string
+        && data.id.size() <= 128
+        && data.uid is string
+        && data.uid == request.auth.uid
+        && data.actionType is string
+        && data.actionType.size() <= 100
+        && data.description is string
+        && data.description.size() <= 500;
+    }
+
+    // 4. Matches for Collections (Rule 11/12 of Fortress Rules)
+    match /user_profiles/{uid} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && isOwner(uid);
+      allow create: if isSignedIn() && isOwner(uid) && isValidUserProfile(request.resource.data) 
+                    && request.resource.data.createdAt == request.time;
+      allow update: if isSignedIn() && isOwner(uid) && isValidUserProfile(request.resource.data)
+                    && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false; // Profiles are permanent records
+    }
+
+    match /user_actions/{actionId} {
+      allow get: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isSignedIn() && isOwner(request.resource.data.uid) && isValidUserAction(request.resource.data)
+                    && request.resource.data.timestamp == request.time;
+      allow update, delete: if false; // Action logs are append-only immutable audit trials
+    }
+
+  }
+}

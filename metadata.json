@@ -1,0 +1,10 @@
+{
+  "name": "FarmX",
+  "description": "Premium agro-logistics marketplace connecting local Nigerian farmers with consumer demand using automated planting calendars, escrow checkout, Firebase Auth, Firestore audit database, and Supabase images.",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

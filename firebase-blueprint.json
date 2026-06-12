@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "user_profiles": {
+      "title": "User Profile",
+      "description": "Registered profile for farmer or consumer",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Auth UID" },
+        "fullName": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "description": "Email address" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "role": { "type": "string", "enum": ["farmer", "consumer"], "description": "Functional role within system" },
+        "farmName": { "type": "string", "description": "Farm identification name" },
+        "farmState": { "type": "string", "description": "Nigeria state of farm location" },
+        "farmSize": { "type": "string", "description": "Hectarage of farm" },
+        "deliveryAddress": { "type": "string", "description": "Consumer address for delivery" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp created" }
+      },
+      "required": ["uid", "fullName", "email", "role"]
+    },
+    "user_actions": {
+      "title": "User Action Log",
+      "description": "Log records capturing actions done by the user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique record id" },
+        "uid": { "type": "string", "description": "User account ID" },
+        "email": { "type": "string", "description": "User email address" },
+        "actionType": { "type": "string", "description": "Interaction key code" },
+        "description": { "type": "string", "description": "Human-friendly narrative log" },
+        "metadata": { "type": "string", "description": "Additional custom field payload" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "Timestamp action performed" }
+      },
+      "required": ["id", "uid", "actionType", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/user_profiles/{uid}": {
+      "schema": "user_profiles",
+      "description": "Profiles indexed by their auth UID"
+    },
+    "/user_actions/{actionId}": {
+      "schema": "user_actions",
+      "description": "Audit trails storing actions of registered or guest users"
+    }
+  }
+}
