@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore';
 
 // Initialize Firebase App
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -217,6 +218,120 @@ export async function createOrder(orderData: {
   } catch (error) {
     console.warn('Creating order failed/unconfigured:', error);
     return null;
+  }
+}
+// ---- PRODUCTS ----
+export async function createProduct(productData: {
+  farmerUid: string;
+  name: string;
+  category: string;
+  price: number;
+  unit: string;
+  qty: number;
+  description?: string;
+  images: string[];
+  farmerName: string;
+  farmState: string;
+}) {
+  try {
+    const colRef = collection(db, 'products');
+    const docRef = doc(colRef);
+    const record = {
+      id: docRef.id,
+      ...productData,
+      sold: 0,
+      status: productData.qty > 0 ? 'in_stock' : 'out_of_stock',
+      createdAt: serverTimestamp(),
+    };
+    await setDoc(docRef, record);
+    return docRef.id;
+  } catch (error) {
+    console.error('Creating product failed:', error);
+    return null;
+  }
+}
+
+export function subscribeToMarketplaceProducts(callback: (products: any[]) => void) {
+  const q = query(collection(db, 'products'), where('status', 'in', ['in_stock', 'low_stock']));
+  return onSnapshot(q, (snapshot) => {
+    const items: any[] = [];
+    snapshot.forEach(doc => items.push({ ...doc.data(), id: doc.id }));
+    callback(items);
+  }, (err) => {
+    console.error('Marketplace subscription error:', err);
+    callback([]);
+  });
+}
+
+export function subscribeToFarmerProducts(farmerUid: string, callback: (products: any[]) => void) {
+  const q = query(collection(db, 'products'), where('farmerUid', '==', farmerUid));
+  return onSnapshot(q, (snapshot) => {
+    const items: any[] = [];
+    snapshot.forEach(doc => items.push({ ...doc.data(), id: doc.id }));
+    callback(items);
+  }, (err) => {
+    console.error('Farmer products subscription error:', err);
+    callback([]);
+  });
+}
+
+// ---- ORDERS (real-time) ----
+export function subscribeToFarmerOrders(farmerUid: string, callback: (orders: any[]) => void) {
+  const q = query(collection(db, 'orders'), where('farmerUid', '==', farmerUid));
+  return onSnapshot(q, (snapshot) => {
+    const items: any[] = [];
+    snapshot.forEach(doc => items.push({ ...doc.data(), id: doc.id }));
+    items.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    callback(items);
+  }, (err) => {
+    console.error('Farmer orders subscription error:', err);
+    callback([]);
+  });
+}
+
+export function subscribeToConsumerOrders(buyerUid: string, callback: (orders: any[]) => void) {
+  const q = query(collection(db, 'orders'), where('buyerUid', '==', buyerUid));
+  return onSnapshot(q, (snapshot) => {
+    const items: any[] = [];
+    snapshot.forEach(doc => items.push({ ...doc.data(), id: doc.id }));
+    items.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+    callback(items);
+  }, (err) => {
+    console.error('Consumer orders subscription error:', err);
+    callback([]);
+  });
+}
+
+// ---- PLANTING CALENDARS (Firestore, not localStorage) ----
+export async function savePlantingSchedule(uid: string, schedule: any) {
+  try {
+    const colRef = collection(db, 'planting_calendars');
+    const docRef = doc(colRef, schedule.id);
+    await setDoc(docRef, { ...schedule, uid, updatedAt: serverTimestamp() });
+    return docRef.id;
+  } catch (error) {
+    console.error('Saving planting schedule failed:', error);
+    return null;
+  }
+}
+
+export function subscribeToPlantingSchedules(uid: string, callback: (schedules: any[]) => void) {
+  const q = query(collection(db, 'planting_calendars'), where('uid', '==', uid));
+  return onSnapshot(q, (snapshot) => {
+    const items: any[] = [];
+    snapshot.forEach(doc => items.push({ ...doc.data(), id: doc.id }));
+    callback(items);
+  }, (err) => {
+    console.error('Planting schedules subscription error:', err);
+    callback([]);
+  });
+}
+
+export async function deletePlantingSchedule(scheduleId: string) {
+  try {
+    await deleteDoc(doc(db, 'planting_calendars', scheduleId));
+  } catch (error) {
+    console.error('Deleting planting schedule failed:', error);
   }
 }
 

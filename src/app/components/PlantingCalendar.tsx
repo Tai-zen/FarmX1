@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Bell, Smartphone, ChevronLeft, ChevronRight, CheckCircle2, Circle, Download, X, Plus } from 'lucide-react';
-
+import { subscribeToPlantingSchedules, deletePlantingSchedule } from '../firebase';
 const phases = [
   { key: 'pre', label: 'Pre-planting', color: '#27500A', bg: '#EAF3DE', desc: 'Soil prep, inputs, land clearing' },
   { key: 'planting', label: 'Planting', color: '#3B6D11', bg: '#D4E8C2', desc: 'Sowing, spacing, first watering' },
@@ -42,42 +42,28 @@ export function PlantingCalendar({ onNavigate, profile }: Props) {
   const [activeScheduleId, setActiveScheduleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  React.useEffect(() => {
+React.useEffect(() => {
+    if (!profile || !profile.uid) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
-
-    if (!profile) {
-      setLoading(false);
-      return;
-    }
-
-    if (!profile.uid) {
-      console.warn('[PlantingCalendar] profile.uid is missing — schedules cannot be loaded reliably.');
-      setLoading(false);
-      return;
-    }
-
-    // Load all schedules from multi-schedule key
-    const schedulesKey = `crop_schedules_${profile.uid}`;
-    const schedulesJson = localStorage.getItem(schedulesKey);
-    if (schedulesJson) {
-      try {
-        const schedules = JSON.parse(schedulesJson);
-        setAllSchedules(schedules);
-
-        // Try to set active schedule to the one marked as active, or first one
-        const activeIdKey = `farmx_active_schedule_${profile.uid}`;
-        const activeId = localStorage.getItem(activeIdKey);
-        if (activeId && schedules.some((s: any) => s.id === activeId)) {
-          setActiveScheduleId(activeId);
-        } else if (schedules.length > 0) {
-          setActiveScheduleId(schedules[0].id);
-        }
-      } catch (e) {
-        console.error('Failed to parse schedules:', e);
+    const unsubscribe = subscribeToPlantingSchedules(profile.uid, (schedules) => {
+      setAllSchedules(schedules);
+      if (schedules.length > 0) {
+        setActiveScheduleId(prev => {
+          // keep current selection if it still exists, else default to first
+          if (prev && schedules.some(s => s.id === prev)) return prev;
+          return schedules[0].id;
+        });
+      } else {
+        setActiveScheduleId(null);
       }
-    }
+      setLoading(false);
+    });
 
-    setLoading(false);
+    return () => unsubscribe();
   }, [profile]);
 
   const isNewUser = profile && !profile.isDemo && allSchedules.length === 0 && !loading;
@@ -109,35 +95,18 @@ export function PlantingCalendar({ onNavigate, profile }: Props) {
   // Get active schedule
   const activeSchedule = allSchedules.find(s => s.id === activeScheduleId) || allSchedules[0];
   
-  const handleDeleteSchedule = (scheduleId: string) => {
+const handleDeleteSchedule = async (scheduleId: string) => {
     if (!profile) return;
-    
-    const updatedSchedules = allSchedules.filter(s => s.id !== scheduleId);
-    const schedulesKey = `crop_schedules_${profile.uid}`;
-    
-    if (updatedSchedules.length > 0) {
-      localStorage.setItem(schedulesKey, JSON.stringify(updatedSchedules));
-      setAllSchedules(updatedSchedules);
-      
-      // Switch to first remaining schedule
-      setActiveScheduleId(updatedSchedules[0].id);
-      localStorage.setItem(`farmx_active_schedule_${profile.uid}`, updatedSchedules[0].id);
-    } else {
-      // No schedules left
-      localStorage.removeItem(schedulesKey);
-      localStorage.removeItem(`farmx_active_schedule_${profile.uid}`);
-      setAllSchedules([]);
-      setActiveScheduleId(null);
-    }
+    await deletePlantingSchedule(scheduleId);
+    // onSnapshot will auto-update allSchedules; just fix active selection
+    const remaining = allSchedules.filter(s => s.id !== scheduleId);
+    setActiveScheduleId(remaining.length > 0 ? remaining[0].id : null);
   };
   
-  const handleSwitchSchedule = (scheduleId: string) => {
+const handleSwitchSchedule = (scheduleId: string) => {
     setActiveScheduleId(scheduleId);
-    if (profile) {
-      localStorage.setItem(`farmx_active_schedule_${profile.uid}`, scheduleId);
-    }
   };
-
+  
   // For active schedules, show multiple crop management
   if (activeSchedule && allSchedules.length > 0) {
     const toggleDone = (i: number) => setDoneTasks(prev => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; });

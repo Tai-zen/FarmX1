@@ -3,6 +3,7 @@ import { ChevronLeft, Upload, X, HelpCircle, FileCheck, CircleSlash } from 'luci
 import { Screen } from './types';
 import { uploadImageToSupabase, getSupabaseConfigError } from '../supabase';
 import { logUserAction } from '../firebase';
+import { createProduct } from '../firebase';
 
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
@@ -75,7 +76,7 @@ export function AddListing({ onNavigate, profile }: Props) {
     fileInputRef.current?.click();
   };
 
-  const handleSave = async () => {
+const handleSave = async () => {
     if (!productName || !price || !quantity) {
       alert('Please fill out all required crop details');
       return;
@@ -83,31 +84,19 @@ export function AddListing({ onNavigate, profile }: Props) {
 
     setSaved(true);
 
-    // Save customized listing to localStorage for dynamic loading
-    try {
-      const userKey = `my_custom_listings_${profile?.uid || 'guest'}`;
-      const stored = localStorage.getItem(userKey);
-      const existingListings = stored ? JSON.parse(stored) : [];
-      
-      const newId = `L_${Date.now()}`;
-      const newListing = {
-        id: newId,
-        name: productName,
-        category,
-        price: Number(price),
-        unit,
-        qty: Number(quantity),
-        sold: 0,
-        status: 'in_stock',
-        img: imageUrls[0] || '🌾'
-      };
+    await createProduct({
+      farmerUid: profile?.uid || 'guest',
+      name: productName,
+      category,
+      price: Number(price),
+      unit,
+      qty: Number(quantity),
+      description,
+      images: imageUrls,
+      farmerName: profile?.fullName || 'FarmX Farmer',
+      farmState: profile?.farmState || 'Nigeria',
+    });
 
-      localStorage.setItem(userKey, JSON.stringify([...existingListings, newListing]));
-    } catch (err) {
-      console.warn('Failed to persist dynamic listing to localStorage:', err);
-    }
-
-    // Save Action to continuous system audit log
     await logUserAction('PUBLISH_CROP_LISTING', 'Farmer successfully published a new crop listing', {
       productName,
       category,

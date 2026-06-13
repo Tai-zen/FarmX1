@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Search, Star, ShoppingCart, Heart, Filter, SlidersHorizontal, MapPin, Award } from 'lucide-react';
 import { Screen } from './types';
+import { subscribeToMarketplaceProducts } from '../firebase';
 
 interface Props {
   onNavigate: (s: Screen, productId?: string) => void;
@@ -10,26 +11,37 @@ interface Props {
 const categories = ['All', 'Vegetables', 'Grains', 'Fruits', 'Spices', 'Tubers', 'Legumes'];
 const states = ['All States', 'Kaduna', 'Kano', 'Lagos', 'Plateau', 'Enugu', 'Niger', 'Oyo'];
 
-const products = [
-  { id: 'P001', name: 'Roma Tomatoes', category: 'Vegetables', price: 700, unit: 'kg', farmer: 'Aminu Danjuma', location: 'Kaduna', rating: 4.9, reviews: 142, qty: 850, emoji: '🍅', verified: true, organic: true, discount: 0 },
-  { id: 'P002', name: 'Sweet Pepper (Tatashe)', category: 'Vegetables', price: 850, unit: 'kg', farmer: 'Aminu Danjuma', location: 'Kaduna', rating: 4.8, reviews: 89, qty: 45, emoji: '🌶️', verified: true, organic: false, discount: 0 },
-  { id: 'P003', name: 'Maize (Dried)', category: 'Grains', price: 350, unit: 'kg', farmer: 'Blessing Okafor', location: 'Plateau', rating: 4.7, reviews: 203, qty: 2000, emoji: '🌽', verified: true, organic: false, discount: 10 },
-  { id: 'P004', name: 'White Onion', category: 'Vegetables', price: 450, unit: 'kg', farmer: 'Musa Ibrahim', location: 'Kano', rating: 4.6, reviews: 67, qty: 320, emoji: '🧅', verified: false, organic: false, discount: 0 },
-  { id: 'P005', name: 'Fresh Ginger', category: 'Spices', price: 1200, unit: 'kg', farmer: 'Aminu Danjuma', location: 'Kaduna', rating: 4.9, reviews: 55, qty: 120, emoji: '🫚', verified: true, organic: true, discount: 0 },
-  { id: 'P006', name: 'Watermelon', category: 'Fruits', price: 2500, unit: 'piece', farmer: 'Fatima Farms', location: 'Niger', rating: 4.5, reviews: 31, qty: 80, emoji: '🍉', verified: false, organic: false, discount: 15 },
-  { id: 'P007', name: 'Cowpea (Black-eyed)', category: 'Legumes', price: 600, unit: 'kg', farmer: 'Blessing Okafor', location: 'Plateau', rating: 4.8, reviews: 112, qty: 500, emoji: '🫘', verified: true, organic: false, discount: 0 },
-  { id: 'P008', name: 'Ugu (Pumpkin Leaf)', category: 'Vegetables', price: 300, unit: 'bunch', farmer: 'Ngozi Farms', location: 'Enugu', rating: 4.7, reviews: 78, qty: 200, emoji: '🥬', verified: true, organic: true, discount: 0 },
-  { id: 'P009', name: 'Irish Potato', category: 'Tubers', price: 550, unit: 'kg', farmer: 'Jos Farms Coop', location: 'Plateau', rating: 4.5, reviews: 94, qty: 1500, emoji: '🥔', verified: true, organic: false, discount: 0 },
-  { id: 'P010', name: 'Garden Egg', category: 'Vegetables', price: 280, unit: 'kg', farmer: 'Ngozi Farms', location: 'Enugu', rating: 4.4, reviews: 45, qty: 180, emoji: '🍆', verified: false, organic: false, discount: 0 },
-  { id: 'P011', name: 'Dried Crayfish', category: 'Spices', price: 3500, unit: 'kg', farmer: 'Delta Aqua Farms', location: 'Rivers', rating: 4.9, reviews: 167, qty: 80, emoji: '🦐', verified: true, organic: false, discount: 0 },
-  { id: 'P012', name: 'Banana (Hand)', category: 'Fruits', price: 800, unit: 'bunch', farmer: 'Sunshine Farms', location: 'Oyo', rating: 4.6, reviews: 52, qty: 120, emoji: '🍌', verified: false, organic: true, discount: 5 },
-  { id: 'P013', name: 'Sorghum Grain', category: 'Grains', price: 320, unit: 'kg', farmer: 'Aminu Danjuma', location: 'Kaduna', rating: 4.7, reviews: 88, qty: 3000, emoji: '🌾', verified: true, organic: false, discount: 0 },
-  { id: 'P014', name: 'Cassava Flour', category: 'Tubers', price: 420, unit: 'kg', farmer: 'Benue Roots Ltd', location: 'Benue', rating: 4.6, reviews: 73, qty: 800, emoji: '🥣', verified: true, organic: false, discount: 0 },
-  { id: 'P015', name: 'Pawpaw (Papaya)', category: 'Fruits', price: 1800, unit: 'piece', farmer: 'Sunshine Farms', location: 'Oyo', rating: 4.8, reviews: 39, qty: 60, emoji: '🥭', verified: false, organic: true, discount: 0 },
-  { id: 'P016', name: 'Locust Bean (Dawadawa)', category: 'Spices', price: 2800, unit: 'kg', farmer: 'Kano Spice Co.', location: 'Kano', rating: 4.7, reviews: 121, qty: 250, emoji: '🌰', verified: true, organic: false, discount: 0 },
-];
+
 
 export function Marketplace({ onNavigate, onAddToCart }: Props) {
+  const [products, setProducts] = useState<any[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+
+  useEffect(() => {
+    const unsub = subscribeToMarketplaceProducts((items) => {
+      // normalize shape to match what the rest of the component expects
+      const mapped = items.map(p => ({
+        id: p.id,
+        name: p.name,
+        category: p.category,
+        price: p.price,
+        unit: p.unit,
+        farmer: p.farmerName || 'FarmX Farmer',
+        location: p.farmState || 'Nigeria',
+        rating: 4.5,
+        reviews: 0,
+        qty: p.qty ?? 0,
+        emoji: '🌾',
+        image: p.images?.[0] || null,
+        verified: false,
+        organic: false,
+        discount: 0,
+      }));
+      setProducts(mapped);
+      setLoadingProducts(false);
+    });
+    return () => unsub();
+  }, []);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
   const [stateFilter, setStateFilter] = useState('All States');
@@ -188,7 +200,16 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
                 className="rounded-xl overflow-hidden cursor-pointer transition-all group"
                 style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
                 <div className="h-28 flex items-center justify-center relative" style={{ background: '#F7F6F2' }}>
-                  <span style={{ fontSize: 42 }}>{p.emoji}</span>
+                  {p.image ? (<img src={p.image} alt={p.name} className="w-full h-full object-cover" />
+                    ) : (
+                              <span style={{ fontSize: 42 }}>{p.emoji}</span>
+                        )}
+                  {!loadingProducts && products.length === 0 && (
+                    <div className="rounded-xl p-16 text-center" style={{ border: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}>
+                        <span style={{ fontSize: 36 }}>🌾</span>
+                        <p style={{ fontSize: 14, color: '#5F5E5A', marginTop: 8 }}>No products listed yet. Check back soon!</p>
+                    </div>
+                  )}
                   {p.discount > 0 && (
                     <div className="absolute top-2 left-2 rounded-full px-1.5 py-0.5" style={{ background: '#A32D2D', fontSize: 9, color: '#fff' }}>
                       -{p.discount}%

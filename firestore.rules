@@ -64,5 +64,41 @@ service cloud.firestore {
       allow update, delete: if false; // Action logs are append-only immutable audit trials
     }
 
+    function isValidProduct(data) {
+  return data.farmerUid == request.auth.uid
+    && data.name is string && data.name.size() > 0
+    && data.price is number && data.price >= 0
+    && data.unit is string
+    && data.category is string
+    && data.status in ['in_stock','low_stock','out_of_stock','archived'];
+}
+
+match /products/{productId} {
+  allow get, list: if true; // public marketplace read
+  allow create: if isSignedIn() && isValidProduct(request.resource.data);
+  allow update, delete: if isSignedIn() && resource.data.farmerUid == request.auth.uid;
+}
+
+function isValidOrder(data) {
+  return data.buyerUid == request.auth.uid
+    && data.farmerUid is string
+    && data.amount is number && data.amount > 0
+    && data.status in ['new','dispatched','delivered'];
+}
+
+match /orders/{orderId} {
+  allow get: if isSignedIn() && (resource.data.buyerUid == request.auth.uid || resource.data.farmerUid == request.auth.uid);
+  allow list: if isSignedIn();
+  allow create: if isSignedIn() && isValidOrder(request.resource.data);
+  allow update: if isSignedIn() && (resource.data.buyerUid == request.auth.uid || resource.data.farmerUid == request.auth.uid);
+  allow delete: if false;
+}
+
+match /planting_calendars/{scheduleId} {
+  allow get, list: if isSignedIn() && resource.data.uid == request.auth.uid;
+  allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
+  allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
+}
+
   }
 }

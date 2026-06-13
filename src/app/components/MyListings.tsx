@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Archive, MoreHorizontal } from 'lucide-react';
 import { Screen } from './types';
+import { subscribeToFarmerProducts } from '../firebase';
 
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
@@ -27,15 +28,10 @@ export function MyListings({ onNavigate, profile }: Props) {
 
   const isNewUser = profile && !profile.isDemo;
 
-  useEffect(() => {
+useEffect(() => {
     if (isNewUser) {
-      const userKey = `my_custom_listings_${profile.uid}`;
-      const stored = localStorage.getItem(userKey);
-      if (stored) {
-        setUserListings(JSON.parse(stored));
-      } else {
-        setUserListings([]);
-      }
+      const unsub = subscribeToFarmerProducts(profile.uid, setUserListings);
+      return () => unsub();
     } else {
       setUserListings(demoListings);
     }
@@ -91,14 +87,10 @@ export function MyListings({ onNavigate, profile }: Props) {
               {/* Image area */}
               <div className="h-36 flex items-center justify-center relative overflow-hidden"
                 style={{ background: '#F7F6F2', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
-                {listing.img?.startsWith('http') ? (
-                  <img
-                    src={listing.img}
-                    alt={listing.name}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <span style={{ fontSize: 52 }}>{listing.img}</span>
+                {listing.images?.[0] ? (
+                    <img src={listing.images[0]} alt={listing.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <span style={{ fontSize: 52 }}>🌾</span>
                 )}
                 <div className="absolute top-2 right-2 relative">
                   <button

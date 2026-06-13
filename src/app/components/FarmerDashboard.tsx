@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Wallet, ClipboardList, TrendingUp, Sprout, ChevronRight,
   Bell, Sun, CloudRain, Wind, CheckCircle2, Circle, AlertCircle
 } from 'lucide-react';
 import { Screen } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
-
+import { subscribeToPlantingSchedules } from '../firebase';
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
 const salesData = [
@@ -105,6 +105,21 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
     });
   };
 
+
+// inside component:
+const [schedules, setSchedules] = useState<any[]>([]);
+useEffect(() => {
+  if (!profile?.uid) return;
+  const unsub = subscribeToPlantingSchedules(profile.uid, setSchedules);
+  return () => unsub();
+}, [profile]);
+
+const activeSchedule = schedules[0];
+const cropPlanValue = activeSchedule ? activeSchedule.cropName : (isNewUser ? 'None' : 'Tomatoes');
+const cropPlanSub = activeSchedule
+  ? `Harvest: ${activeSchedule.harvestMonth}`
+  : (isNewUser ? 'No active crop plan yet' : 'Week 6 of 14 · On track');
+  
   return (
     <div className="p-5 lg:p-6 max-w-6xl mx-auto">
       {/* Header */}

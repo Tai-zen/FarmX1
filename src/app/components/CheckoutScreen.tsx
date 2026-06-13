@@ -6,7 +6,7 @@ import {
   Sparkles, Wifi, ShieldCheck, HelpCircle
 } from 'lucide-react';
 import { Screen } from './types';
-import { logUserAction } from '../firebase';
+import { logUserAction, createOrder, auth } from '../firebase';
 
 interface Props { onNavigate: (s: Screen) => void; }
 

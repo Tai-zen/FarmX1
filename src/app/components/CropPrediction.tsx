@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { MapPin, CloudRain, Thermometer, Wind, Droplets, CheckCircle, Loader, Info, AlertTriangle, Map as MapIcon } from 'lucide-react';
 import { Screen } from './types';
-import { logUserAction } from '../firebase';
 import { CropPredictionMap } from './CropPredictionMap';
 import { searchLocation } from '../services/geocoding.service';
 import { fetchLiveWeather } from '../services/weather.service';
 import { NIGERIA_CROPS } from '../data/nigeriaCrops';
-
+import { logUserAction, savePlantingSchedule } from '../firebase';
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
 const farmFields = [
@@ -402,18 +401,10 @@ export function CropPrediction({ onNavigate, profile }: Props) {
     }, 120);
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     setGenerated(true);
 
-    // Save to multi-schedule array for concurrent crops
     if (profile && profile.uid) {
-      const schedulesKey = `crop_schedules_${profile.uid}`;
-
-      // Load existing schedules
-      const existingSchedulesJson = localStorage.getItem(schedulesKey);
-      const schedules = existingSchedulesJson ? JSON.parse(existingSchedulesJson) : [];
-
-      // Create new schedule with unique ID
       const scheduleId = `${crop.name.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`;
       const newSchedule = {
         id: scheduleId,
@@ -430,17 +421,12 @@ export function CropPrediction({ onNavigate, profile }: Props) {
         generatedAt: new Date().toISOString(),
       };
 
-      // Add to schedules array
-      schedules.push(newSchedule);
-      localStorage.setItem(schedulesKey, JSON.stringify(schedules));
-
-      // Set as active schedule for immediate display
-      localStorage.setItem(`farmx_active_schedule_${profile.uid}`, scheduleId);
+      // Persist to Firestore so PlantingCalendar / Overview pick it up via onSnapshot
+      await savePlantingSchedule(profile.uid, newSchedule);
     } else {
       console.warn('[CropPrediction] No profile.uid available — planting calendar will not persist.');
     }
 
-    // Record interaction in Firebase audit logger
     logUserAction('GENERATE_PLANTING_CALENDAR', 'Farmer generated custom calendar for selected crop', {
       crop: crop.name,
       field: activeField === -1 ? 'Custom GPS Point' : farmFields[activeField].label,
