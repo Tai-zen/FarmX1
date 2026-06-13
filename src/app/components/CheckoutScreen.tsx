@@ -224,7 +224,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
   const handleVerifyOtp = (e: React.FormEvent) => {
     e.preventDefault();
     setGatewayStage('submitting');
-    setTimeout(() => {
+    setTimeout(async () => {
       setGatewayStage('success');
 
       // Log payment audit action to Firestore
@@ -233,6 +233,21 @@ export function CheckoutScreen({ onNavigate }: Props) {
         destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
         distance: distanceInKm
       });
+      try {
+        await createOrder({
+          farmerUid: 'unassigned', // TODO: requires cart refactor — see note
+          buyerUid: auth.currentUser?.uid || 'guest',
+          buyerName: recipientName,
+          buyerPhone: recipientPhone,
+          buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+          product: 'Cart items',
+          amount: orderTotal,
+          items: 3,
+          paymentMethod: 'card',
+        });
+      } catch (err) {
+        console.error('createOrder failed (card):', err);
+      }
 
       setTimeout(() => {
         setShowGateway(false);
@@ -244,7 +259,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
   // Fast verify bank payment transfer
   const triggerVerifyTransfer = () => {
     setTransferCheckedStatus('verifying');
-    setTimeout(() => {
+    setTimeout(async () => {
       setTransferCheckedStatus('found');
 
       // Log payment audit action to Firestore
@@ -253,7 +268,21 @@ export function CheckoutScreen({ onNavigate }: Props) {
         destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
         distance: distanceInKm
       });
-
+      try {
+        await createOrder({
+          farmerUid: 'unassigned',
+          buyerUid: auth.currentUser?.uid || 'guest',
+          buyerName: recipientName,
+          buyerPhone: recipientPhone,
+          buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+          product: 'Cart items',
+          amount: orderTotal,
+          items: 3,
+          paymentMethod: 'bank',
+        });
+      } catch (err) {
+        console.error('createOrder failed (bank):', err);
+      }
       setTimeout(() => {
         setShowGateway(false);
         setDone(true);
@@ -266,7 +295,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
     setUssdStep(2);
   };
 
-  const handleUSSDSuccessConfirm = () => {
+  const handleUSSDSuccessConfirm = async () => {
     setUssdStep(3);
 
     // Log payment audit action to Firestore
@@ -275,6 +304,22 @@ export function CheckoutScreen({ onNavigate }: Props) {
       destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
       distance: distanceInKm
     });
+
+    try {
+      await createOrder({
+        farmerUid: 'unassigned', // TODO: requires cart refactor — see note
+        buyerUid: auth.currentUser?.uid || 'guest',
+        buyerName: recipientName,
+        buyerPhone: recipientPhone,
+        buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+        product: 'Cart items',
+        amount: orderTotal,
+        items: 3,
+        paymentMethod: 'ussd',
+      });
+    } catch (err) {
+      console.error('createOrder failed (ussd):', err);
+    }
 
     setTimeout(() => {
       setShowGateway(false);
@@ -805,7 +850,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
                   )}
 
                   {payMethod === 'bank' && (
-                    <div className="space-y-4 text-xs" id="interswitch-bank-transfer-form">
+                    <div className="space-y-4 text-xs overflow-x-auto" id="interswitch-bank-transfer-form">
                       <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Agritech Escrow Bank settlement</h4>
                       <p className="text-[11px] text-gray-500 leading-normal">
                         Transfer the exact amount to the temporary automated escrow trust account allocated for your order.
@@ -816,7 +861,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
                           <span className="text-[10px] text-gray-400">Beneficiary Bank</span>
                           <span className="font-semibold text-gray-800">Providus Bank [AgriAgro Switch]</span>
                         </div>
-                        <div className="flex justify-between items-center">
+                        <div className="flex justify-between items-center flex-wrap gap-1">
                           <span className="text-[10px] text-gray-400">Account Number</span>
                           <div className="flex items-center gap-1.5">
                             <span className="font-bold text-gray-900 tracking-wider">9201882110</span>
@@ -858,7 +903,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
                   )}
 
                   {payMethod === 'ussd' && (
-                    <div className="space-y-4 text-xs" id="interswitch-ussd-form">
+                    <div className="space-y-4 text-xs overflow-x-auto" id="interswitch-ussd-form">
                       <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">USSD Mobile banking gateway</h4>
                       <p className="text-[11px] text-gray-500">
                         Dial this structured mobile USSD offline dialer string to authorize immediate funds from your bank ledger.
@@ -886,7 +931,7 @@ export function CheckoutScreen({ onNavigate }: Props) {
                       {/* USSD screen interactive simulator */}
                       {ussdStep === 1 && (
                         <div className="bg-slate-900 text-slate-100 p-4 rounded-xl text-center shadow-inner font-mono relative overflow-hidden text-xs">
-                          <p className="text-emerald-400 font-bold tracking-widest text-[#00ffcc]" style={{ color: '#00ffcc' }}>
+                          <p className="text-emerald-400 font-bold tracking-widest text-[#00ffcc] break-all" style={{ color: '#00ffcc' }}>
                             {ussdProviders.find(p => p.id === selectedUSSDId)?.code}28116*₦{orderTotal}#
                           </p>
                           <p className="text-[10px] text-gray-400 mt-2">FarmX cooperative checkout dial string</p>

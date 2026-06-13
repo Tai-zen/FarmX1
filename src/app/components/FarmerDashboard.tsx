@@ -84,9 +84,6 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
   const salesValue = isNewUser ? '₦0' : '₦287,000';
   const salesSub = isNewUser ? 'No sales this month' : '↑ +24% vs last month';
 
-  const cropPlanValue = isNewUser ? 'None' : 'Tomatoes';
-  const cropPlanSub = isNewUser ? 'No active crop plan yet' : 'Week 6 of 14 · On track';
-
   const totalRevenueText = isNewUser ? '₦0' : '₦1,115,000';
   const totalOrdersText = isNewUser ? '0' : '182';
   const avgOrderValueText = isNewUser ? '₦0' : '₦6,126';

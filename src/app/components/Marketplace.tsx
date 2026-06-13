@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Star, ShoppingCart, Heart, Filter, SlidersHorizontal, MapPin, Award } from 'lucide-react';
 import { Screen } from './types';
-import { subscribeToMarketplaceProducts } from '../firebase';
+import { subscribeToMarketplaceProducts, addToCart, auth } from '../firebase';
 
 interface Props {
   onNavigate: (s: Screen, productId?: string) => void;
@@ -76,6 +76,20 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
     if (addedIds.has(id)) return;
     setAddedIds(prev => new Set(prev).add(id));
     onAddToCart();
+
+    const uid = auth.currentUser?.uid;
+    const product = products.find(p => p.id === id);
+    if (uid && product) {
+      addToCart(uid, {
+        id: product.id,
+        name: product.name,
+        farmerName: product.farmer,
+        price: product.price,
+        unit: product.unit,
+        emoji: product.emoji,
+        image: product.image,
+      }).catch(err => console.error('Failed to add item to cart:', err));
+    }
   };
 
   const toggleLike = (id: string, e: React.MouseEvent) => {

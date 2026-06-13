@@ -1,40 +1,109 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Trash2, Info } from 'lucide-react';
 import { Screen } from './types';
+import { auth, subscribeToCart, updateCartItemQty, removeCartItem, clearCart, CartItemDoc } from '../firebase';
 
 interface Props {
   onNavigate: (s: Screen) => void;
   onCartChange: (delta: number) => void;
 }
 
-const initialItems = [
-  { id: 'P001', name: 'Roma Tomatoes', farmer: 'Aminu Danjuma', price: 700, unit: 'kg', qty: 5, emoji: '🍅' },
-  { id: 'P003', name: 'Maize (Dried)', farmer: 'Blessing Okafor', price: 350, unit: 'kg', qty: 10, emoji: '🌽' },
-  { id: 'P004', name: 'White Onion', farmer: 'Musa Ibrahim', price: 450, unit: 'kg', qty: 3, emoji: '🧅' },
-];
+interface DisplayCartItem {
+  id: string;
+  productId: string;
+  name: string;
+  farmer: string;
+  price: number;
+  unit: string;
+  qty: number;
+  emoji: string;
+  image?: string | null;
+}
 
 export function CartScreen({ onNavigate, onCartChange }: Props) {
-  const [items, setItems] = useState(initialItems);
+  const [items, setItems] = useState<DisplayCartItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const prevCountRef = useRef<number | null>(null);
 
-  const update = (id: string, delta: number) => {
-    setItems(prev => prev.map(item =>
-      item.id === id ? { ...item, qty: Math.max(1, item.qty + delta) } : item
-    ));
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
+
+    const unsub = subscribeToCart(uid, (cartItems: CartItemDoc[]) => {
+      const mapped = cartItems.map((c) => ({
+        id: c.id,
+        productId: c.productId,
+        name: c.name || 'Unnamed product',
+        farmer: c.farmerName || 'FarmX Farmer',
+        price: c.price ?? 0,
+        unit: c.unit || 'unit',
+        qty: c.qty ?? 1,
+        emoji: c.emoji || '🌾',
+        image: c.image || null,
+      }));
+
+      const prevCount = prevCountRef.current ?? 0;
+      const delta = mapped.length - prevCount;
+      if (delta !== 0) onCartChange(delta);
+      prevCountRef.current = mapped.length;
+
+      setItems(mapped);
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, []);
+
+  const update = async (id: string, delta: number) => {
+    const item = items.find((i) => i.id === id);
+    if (!item) return;
+    const newQty = Math.max(1, item.qty + delta);
+
+    // Optimistic UI update
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, qty: newQty } : i)));
+
+    try {
+      await updateCartItemQty(id, newQty);
+    } catch (err) {
+      console.error('Failed to update cart item quantity:', err);
+    }
   };
 
-  const remove = (id: string) => {
-    setItems(prev => prev.filter(item => item.id !== id));
-    onCartChange(-1);
+  const remove = async (id: string) => {
+    try {
+      await removeCartItem(id);
+    } catch (err) {
+      console.error('Failed to remove cart item:', err);
+    }
   };
 
-  const clearAll = () => {
-    setItems([]);
-    onCartChange(-items.length);
+  const clearAll = async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    try {
+      await clearCart(uid);
+    } catch (err) {
+      console.error('Failed to clear cart:', err);
+    }
   };
 
   const subtotal = items.reduce((sum, i) => sum + i.price * i.qty, 0);
   const delivery = items.length > 0 ? 2500 : 0;
   const total = subtotal + delivery;
+
+  if (loading) {
+    return (
+      <div className="p-5 lg:p-6 max-w-4xl mx-auto">
+        <div className="rounded-xl p-16 text-center" style={{ border: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}>
+          <p style={{ fontSize: 14, color: '#5F5E5A' }}>Loading your cart…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-5 lg:p-6 max-w-4xl mx-auto">
@@ -64,9 +133,13 @@ export function CartScreen({ onNavigate, onCartChange }: Props) {
             {items.map(item => (
               <div key={item.id} className="flex items-center gap-3 p-4 rounded-xl"
                 style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
-                <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
+                <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden"
                   style={{ background: '#F7F6F2', fontSize: 26 }}>
-                  {item.emoji}
+                  {item.image ? (
+                    <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
+                  ) : (
+                    item.emoji
+                  )}
                 </div>
                 <div className="flex-1 min-w-0">
                   <p style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>{item.name}</p>

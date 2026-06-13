@@ -100,5 +100,22 @@ match /planting_calendars/{scheduleId} {
   allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
 }
 
+function isValidCartItem(data) {
+  return data.userId == request.auth.uid
+    && data.productId is string
+    && data.name is string
+    && data.price is number && data.price >= 0
+    && data.unit is string
+    && data.qty is number && data.qty > 0;
+}
+
+match /carts/{cartItemId} {
+  allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
+  allow create: if isSignedIn() && isValidCartItem(request.resource.data);
+  allow update: if isSignedIn() && resource.data.userId == request.auth.uid
+                && request.resource.data.userId == resource.data.userId;
+  allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+}
+
   }
 }

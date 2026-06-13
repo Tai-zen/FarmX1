@@ -2,7 +2,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc, collection, addDoc, serverTimestamp, query, where, getDocs } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { onSnapshot, updateDoc, deleteDoc } from 'firebase/firestore';
+import { onSnapshot, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 
 // Initialize Firebase App
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -344,5 +344,135 @@ export async function updateOrderStatus(orderId: string, status: 'new' | 'dispat
     await setDoc(docRef, { status }, { merge: true });
   } catch (error) {
     console.warn('Updating order status failed/unconfigured:', error);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// CART
+//
+// carts/{cartItemId} = {
+//   userId:     string   // auth.currentUser.uid
+//   productId:  string   // id of the product in /products
+//   name:       string
+//   farmerName: string
+//   price:      number
+//   unit:       string
+//   emoji:      string
+//   image:      string | null
+//   qty:        number
+//   addedAt:    Timestamp
+// }
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface CartItemDoc {
+  id: string;
+  userId: string;
+  productId: string;
+  name: string;
+  farmerName?: string;
+  price: number;
+  unit: string;
+  emoji?: string;
+  image?: string | null;
+  qty: number;
+}
+
+/**
+ * Live-subscribes to every cart line item belonging to `uid`.
+ * Returns an unsubscribe function.
+ */
+export function subscribeToCart(
+  uid: string,
+  callback: (items: CartItemDoc[]) => void
+) {
+  const q = query(collection(db, 'carts'), where('userId', '==', uid));
+  return onSnapshot(q, (snap) => {
+    const items = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as CartItemDoc[];
+    callback(items);
+  }, (err) => {
+    console.error('Cart subscription error:', err);
+    callback([]);
+  });
+}
+
+/**
+ * Adds a product to the user's cart, or increments the quantity if it's
+ * already present.
+ */
+export async function addToCart(
+  uid: string,
+  product: {
+    id: string;
+    name: string;
+    farmerName?: string;
+    price: number;
+    unit: string;
+    emoji?: string;
+    image?: string | null;
+  },
+  qty: number = 1
+) {
+  const q = query(
+    collection(db, 'carts'),
+    where('userId', '==', uid),
+    where('productId', '==', product.id)
+  );
+  try {
+    const snap = await getDocs(q);
+
+    if (!snap.empty) {
+      const existing = snap.docs[0];
+      const currentQty = (existing.data().qty as number) || 0;
+      await updateDoc(existing.ref, { qty: currentQty + qty });
+      return existing.id;
+    }
+
+    const docRef = await addDoc(collection(db, 'carts'), {
+      userId: uid,
+      productId: product.id,
+      name: product.name,
+      farmerName: product.farmerName || 'FarmX Farmer',
+      price: product.price,
+      unit: product.unit,
+      emoji: product.emoji || '🌾',
+      image: product.image || null,
+      qty,
+      addedAt: serverTimestamp(),
+    });
+    return docRef.id;
+  } catch (error) {
+    console.warn('Adding to cart failed/unconfigured:', error);
+    return null;
+  }
+}
+
+/** Sets the quantity for a single cart line item. */
+export async function updateCartItemQty(cartItemId: string, qty: number) {
+  try {
+    await updateDoc(doc(db, 'carts', cartItemId), { qty });
+  } catch (error) {
+    console.warn('Updating cart item quantity failed/unconfigured:', error);
+  }
+}
+
+/** Removes a single line item from the cart. */
+export async function removeCartItem(cartItemId: string) {
+  try {
+    await deleteDoc(doc(db, 'carts', cartItemId));
+  } catch (error) {
+    console.warn('Removing cart item failed/unconfigured:', error);
+  }
+}
+
+/** Removes every cart line item belonging to `uid`. */
+export async function clearCart(uid: string) {
+  try {
+    const q = query(collection(db, 'carts'), where('userId', '==', uid));
+    const snap = await getDocs(q);
+    const batch = writeBatch(db);
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  } catch (error) {
+    console.warn('Clearing cart failed/unconfigured:', error);
   }
 }
