@@ -98,8 +98,10 @@ export function LoginScreen({ onLogin }: Props) {
         } else if (err.message?.includes('apiKey')) {
           // Graceful fallback for sandbox modes
           msg = 'Firebase credential mismatch. Sign-in simulated successfully for testing!';
+          const fallbackUid = `local-${selectedRole}-${Date.now()}`;
           setTimeout(() => {
             onLogin(selectedRole, {
+              uid: fallbackUid,
               fullName,
               email,
               role: selectedRole,
@@ -147,8 +149,10 @@ export function LoginScreen({ onLogin }: Props) {
           err.code === 'auth/invalid-api-key'
         ) {
           msg = `Firebase setup bypassed. Accessing standard ${selectedRole} simulation...`;
+          const fallbackUid = `guest-${selectedRole}-${Date.now()}`;
           setTimeout(() => {
             onLogin(selectedRole, {
+              uid: fallbackUid,
               fullName: `Guest ${selectedRole === 'farmer' ? 'Farmer' : 'Consumer'}`,
               email: email || `guest-${selectedRole}@farmx.org`,
               role: selectedRole
@@ -213,11 +217,11 @@ export function LoginScreen({ onLogin }: Props) {
     }
   };
 
-  // Fast Demo Entry - Automatically logs actions as well
+// Fast Demo Entry - Automatically logs actions as well
   const handleDemoLogin = async (role: UserRole) => {
     setLoading(true);
     setErrorMessage(null);
-    const demoProfile = {
+    let demoProfile: any = {
       fullName: `Demo ${role.toUpperCase()} User`,
       email: `demo-${role}@farmx-sandbox.org`,
       role: role,
@@ -228,6 +232,10 @@ export function LoginScreen({ onLogin }: Props) {
       const userCredential = await signInAnonymously(auth);
       const user = userCredential.user;
 
+      // Attach the real auth uid so localStorage keys (crop schedules,
+      // listings, orders) stay consistent across screens/sessions
+      demoProfile = { ...demoProfile, uid: user.uid };
+
       await createOrUpdateUserProfile(user.uid, demoProfile);
 
       await logUserAction('AUTHENTICATION_DEMO_LOGIN', `Logged in using Sandbox Demo Mode as ${role}`, {
@@ -235,7 +243,10 @@ export function LoginScreen({ onLogin }: Props) {
         role
       });
     } catch (error) {
-       console.log('Firebase anonymous signin bypass active');
+       console.log('Firebase anonymous signin bypass active — using local fallback uid');
+       // Fallback uid so the rest of the app still has something stable
+       // to key localStorage entries on
+       demoProfile = { ...demoProfile, uid: `demo-${role}-${Date.now()}` };
     }
     
     onLogin(role, demoProfile);

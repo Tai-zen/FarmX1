@@ -406,13 +406,13 @@ export function CropPrediction({ onNavigate, profile }: Props) {
     setGenerated(true);
 
     // Save to multi-schedule array for concurrent crops
-    if (profile) {
+    if (profile && profile.uid) {
       const schedulesKey = `crop_schedules_${profile.uid}`;
-      
+
       // Load existing schedules
       const existingSchedulesJson = localStorage.getItem(schedulesKey);
       const schedules = existingSchedulesJson ? JSON.parse(existingSchedulesJson) : [];
-      
+
       // Create new schedule with unique ID
       const scheduleId = `${crop.name.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`;
       const newSchedule = {
@@ -429,13 +429,15 @@ export function CropPrediction({ onNavigate, profile }: Props) {
         duration: crop.duration,
         generatedAt: new Date().toISOString(),
       };
-      
+
       // Add to schedules array
       schedules.push(newSchedule);
       localStorage.setItem(schedulesKey, JSON.stringify(schedules));
-      
+
       // Set as active schedule for immediate display
       localStorage.setItem(`farmx_active_schedule_${profile.uid}`, scheduleId);
+    } else {
+      console.warn('[CropPrediction] No profile.uid available — planting calendar will not persist.');
     }
 
     // Record interaction in Firebase audit logger

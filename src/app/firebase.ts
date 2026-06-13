@@ -163,3 +163,71 @@ export async function getRegisteredFarmers() {
     return [];
   }
 }
+/**
+ * Fetches all orders belonging to a given farmer from Firestore.
+ */
+export async function getFarmerOrders(farmerUid: string) {
+  const path = 'orders';
+  try {
+    const q = query(collection(db, 'orders'), where('farmerUid', '==', farmerUid));
+    const querySnapshot = await getDocs(q);
+    const orders: any[] = [];
+    querySnapshot.forEach((doc) => {
+      orders.push({ id: doc.id, ...doc.data() });
+    });
+    // Most recent first
+    orders.sort((a, b) => {
+      const aTime = a.createdAt?.toMillis ? a.createdAt.toMillis() : 0;
+      const bTime = b.createdAt?.toMillis ? b.createdAt.toMillis() : 0;
+      return bTime - aTime;
+    });
+    return orders;
+  } catch (error) {
+    console.warn('Fetching farmer orders failed/unconfigured:', error);
+    return [];
+  }
+}
+
+/**
+ * Creates a new order document in Firestore (called at checkout).
+ */
+export async function createOrder(orderData: {
+  farmerUid: string;
+  buyerUid: string;
+  buyerName: string;
+  buyerPhone?: string;
+  buyerLocation: string;
+  product: string;
+  amount: number;
+  items?: number;
+  paymentMethod: 'card' | 'bank' | 'ussd';
+}) {
+  const path = 'orders';
+  try {
+    const colRef = collection(db, 'orders');
+    const docRef = doc(colRef);
+    const record = {
+      id: docRef.id,
+      ...orderData,
+      status: 'new',
+      createdAt: serverTimestamp(),
+    };
+    await setDoc(docRef, record);
+    return docRef.id;
+  } catch (error) {
+    console.warn('Creating order failed/unconfigured:', error);
+    return null;
+  }
+}
+
+/**
+ * Marks an order as dispatched.
+ */
+export async function updateOrderStatus(orderId: string, status: 'new' | 'dispatched' | 'delivered') {
+  try {
+    const docRef = doc(db, 'orders', orderId);
+    await setDoc(docRef, { status }, { merge: true });
+  } catch (error) {
+    console.warn('Updating order status failed/unconfigured:', error);
+  }
+}

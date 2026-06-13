@@ -44,30 +44,39 @@ export function PlantingCalendar({ onNavigate, profile }: Props) {
 
   React.useEffect(() => {
     setLoading(true);
-    
+
+    if (!profile) {
+      setLoading(false);
+      return;
+    }
+
+    if (!profile.uid) {
+      console.warn('[PlantingCalendar] profile.uid is missing — schedules cannot be loaded reliably.');
+      setLoading(false);
+      return;
+    }
+
     // Load all schedules from multi-schedule key
-    if (profile) {
-      const schedulesKey = `crop_schedules_${profile.uid}`;
-      const schedulesJson = localStorage.getItem(schedulesKey);
-      if (schedulesJson) {
-        try {
-          const schedules = JSON.parse(schedulesJson);
-          setAllSchedules(schedules);
-          
-          // Try to set active schedule to the one marked as active, or first one
-          const activeIdKey = `farmx_active_schedule_${profile.uid}`;
-          const activeId = localStorage.getItem(activeIdKey);
-          if (activeId && schedules.some((s: any) => s.id === activeId)) {
-            setActiveScheduleId(activeId);
-          } else if (schedules.length > 0) {
-            setActiveScheduleId(schedules[0].id);
-          }
-        } catch (e) {
-          console.error('Failed to parse schedules:', e);
+    const schedulesKey = `crop_schedules_${profile.uid}`;
+    const schedulesJson = localStorage.getItem(schedulesKey);
+    if (schedulesJson) {
+      try {
+        const schedules = JSON.parse(schedulesJson);
+        setAllSchedules(schedules);
+
+        // Try to set active schedule to the one marked as active, or first one
+        const activeIdKey = `farmx_active_schedule_${profile.uid}`;
+        const activeId = localStorage.getItem(activeIdKey);
+        if (activeId && schedules.some((s: any) => s.id === activeId)) {
+          setActiveScheduleId(activeId);
+        } else if (schedules.length > 0) {
+          setActiveScheduleId(schedules[0].id);
         }
+      } catch (e) {
+        console.error('Failed to parse schedules:', e);
       }
     }
-    
+
     setLoading(false);
   }, [profile]);
 
