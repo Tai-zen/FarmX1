@@ -18,14 +18,15 @@ import { AddListing } from './components/AddListing';
 import { AIChatWidget } from './components/AIChatWidget';
 import { UserRole, Screen } from './components/types';
 import { LogOut } from 'lucide-react';
-import { auth, getUserProfile } from './firebase';
+import { auth, getUserProfile, subscribeToCart } from './firebase';
 
 export default function App() {
   const [role, setRole] = useState<UserRole | null>(null);
   const [screen, setScreen] = useState<Screen>('login');
-  const [cartCount, setCartCount] = useState(3);
+  const [cartCount, setCartCount] = useState(0);
   const [profile, setProfile] = useState<any | null>(null);
 
+  // Sync auth state on mount
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       if (currentUser) {
@@ -44,6 +45,19 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Sync cart count from Firestore whenever a user is logged in
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setCartCount(0);
+      return;
+    }
+    const unsub = subscribeToCart(uid, (items) => {
+      setCartCount(items.length);
+    });
+    return () => unsub();
+  }, [profile]);
+
   const handleLogin = (r: UserRole, userProfile?: any) => {
     setRole(r);
     setProfile(userProfile || null);
@@ -55,7 +69,7 @@ export default function App() {
     setRole(null);
     setProfile(null);
     setScreen('login');
-    setCartCount(3);
+    setCartCount(0);
   };
 
   const navigate = (s: Screen) => setScreen(s);
@@ -117,22 +131,22 @@ export default function App() {
         {screen === 'marketplace' && (
           <Marketplace
             onNavigate={(s) => navigate(s)}
-            onAddToCart={() => setCartCount(c => c + 1)}
+            onAddToCart={() => {}} // cart count now driven by Firestore subscription
           />
         )}
         {screen === 'product-detail' && (
           <ProductDetail
             onNavigate={navigate}
-            onAddToCart={() => setCartCount(c => c + 1)}
+            onAddToCart={() => {}} // cart count now driven by Firestore subscription
           />
         )}
         {screen === 'cart' && (
           <CartScreen
             onNavigate={navigate}
-            onCartChange={delta => setCartCount(c => Math.max(0, c + delta))}
+            onCartChange={() => {}} // cart count now driven by Firestore subscription
           />
         )}
-        {screen === 'checkout' && <CheckoutScreen onNavigate={navigate} />}
+        {screen === 'checkout' && <CheckoutScreen onNavigate={navigate} profile={profile} />}
         {screen === 'order-tracking' && <OrderTracking role={role} onNavigate={navigate} profile={profile} />}
       </main>
 

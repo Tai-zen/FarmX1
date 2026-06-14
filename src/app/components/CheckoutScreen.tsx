@@ -6,9 +6,9 @@ import {
   Sparkles, Wifi, ShieldCheck, HelpCircle
 } from 'lucide-react';
 import { Screen } from './types';
-import { logUserAction, createOrder, auth } from '../firebase';
+import { logUserAction, createOrder, auth, subscribeToCart, CartItemDoc, clearCart } from '../firebase';
 
-interface Props { onNavigate: (s: Screen) => void; }
+interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
 // Agricultural Logistical Distribution Hub
 const ESCROW_WAREHOUSE_COORDS = { lat: 6.4678, lng: 3.5222, name: 'FarmX VGC Logistics Hub, Lekki' };
@@ -35,7 +35,7 @@ const NIGERIAN_STATES: StateDetails[] = [
 
 // Haversine formula to compute actual spatial geographical distances in km
 function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
-  const R = 6371; // Earth's radius in km
+  const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = 
@@ -46,16 +46,30 @@ function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: nu
   return R * c; 
 }
 
-export function CheckoutScreen({ onNavigate }: Props) {
-  // State Management
-  const [recipientName, setRecipientName] = useState('Deji Okafor');
-  const [recipientPhone, setRecipientPhone] = useState('+234 803 123 4567');
+// ─── FIX: helper to extract the correct farmerUid from cart items ─────────────
+// CartItemDoc stores farmerUid (the actual uid) separately from farmerName.
+// Previous code was accidentally passing farmerName as the farmerUid, which
+// caused createOrder to write the wrong uid, so the farmer's subscription
+// (which queries by farmerUid) never found the order.
+function extractFarmerUid(items: CartItemDoc[]): string {
+  const first = items[0];
+  if (!first) return 'unassigned';
+  // Prefer the explicit farmerUid field; fall back to farmerName only as last resort
+  return (first as any).farmerUid || first.farmerName || 'unassigned';
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function CheckoutScreen({ onNavigate, profile }: Props) {
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
   const [selectedState, setSelectedState] = useState(NIGERIAN_STATES[0].name);
-  const [selectedCityName, setSelectedCityName] = useState('Lekki');
-  const [streetAddress, setStreetAddress] = useState('12 Adeola Odeku Street');
+  const [selectedCityName, setSelectedCityName] = useState('');
+  const [streetAddress, setStreetAddress] = useState('');
   const [deliverySpeed, setDeliverySpeed] = useState<'standard' | 'express'>('standard');
+
+  const [cartItems, setCartItems] = useState<CartItemDoc[]>([]);
+  const [cartLoading, setCartLoading] = useState(true);
   
-  // Weather API states
   const [weatherData, setWeatherData] = useState({
     temp: '29°C',
     humidity: '82%',
@@ -67,33 +81,27 @@ export function CheckoutScreen({ onNavigate }: Props) {
   const [isWeatherLoading, setIsWeatherLoading] = useState(false);
   const [weatherError, setWeatherError] = useState(false);
 
-  // Checkout Payment Gateway Modal state
   const [showGateway, setShowGateway] = useState(false);
   const [payMethod, setPayMethod] = useState<'card' | 'bank' | 'ussd'>('card');
   const [gatewayStage, setGatewayStage] = useState<'input' | 'otp' | 'submitting' | 'success'>('input');
   
-  // Card Inputs
   const [cardNumber, setCardNumber] = useState('');
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvv, setCardCvv] = useState('');
   const [otpValue, setOtpValue] = useState('');
   const [cardError, setCardError] = useState('');
 
-  // Bank Transfer sandbox
   const [transferMinutes, setTransferMinutes] = useState(14);
   const [transferSeconds, setTransferSeconds] = useState(59);
   const [transferCheckedStatus, setTransferCheckedStatus] = useState<'none' | 'verifying' | 'found' | 'error'>('none');
 
-  // USSD sandbox
   const [selectedUSSDId, setSelectedUSSDId] = useState('gtb');
   const [ussdOverlayActive, setUssdOverlayActive] = useState(false);
-  const [ussdStep, setUssdStep] = useState(1); // 1 = Dialing, 2 = Pin/Confirm screen, 3 = Completed
+  const [ussdStep, setUssdStep] = useState(1);
 
-  // Completion states
   const [processing, setProcessing] = useState(false);
   const [done, setDone] = useState(false);
 
-  // Dynamic calculations
   const matchedState = NIGERIAN_STATES.find(s => s.name.trim().toLowerCase() === selectedState.trim().toLowerCase()) || NIGERIAN_STATES[0];
   const activeLat = matchedState.lat;
   const activeLng = matchedState.lng;
@@ -105,16 +113,14 @@ export function CheckoutScreen({ onNavigate }: Props) {
     activeLng
   );
 
-  // Highly affordable consumer shipping fee rates: Lagos is ₦505, other states standard is ₦1,200. Express adds ₦500.
   const isLocal = selectedState.trim().toLowerCase() === 'lagos';
   const baseLogisticsFee = isLocal ? 500 : 1200;
   const calcDeliveryFee = deliverySpeed === 'express' ? baseLogisticsFee + 500 : baseLogisticsFee;
 
-  const orderSubtotal = 8350;
-  const platformFee = 250; // Dynamic escort packing insurance
+  const orderSubtotal = cartItems.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const platformFee = 250;
   const orderTotal = orderSubtotal + calcDeliveryFee + platformFee;
 
-  // Interswitch gateway options
   const ussdProviders = [
     { id: 'gtb', name: 'GTBank', code: '*737*1*2*' },
     { id: 'zenith', name: 'Zenith Bank', code: '*966*3*' },
@@ -122,15 +128,12 @@ export function CheckoutScreen({ onNavigate }: Props) {
     { id: 'uer', name: 'United Bank for Africa', code: '*919*8*' }
   ];
 
-  // Map dragging element reference for simulated boundaries
   const mockCanvasRef = useRef<HTMLDivElement>(null);
 
-  // Fetch real, live weather forecast parameters via public Open-Meteo API
   useEffect(() => {
     setIsWeatherLoading(true);
     setWeatherError(false);
     
-    // Non-blocking query to Open-Meteo
     fetch(`https://api.open-meteo.com/v1/forecast?latitude=${activeLat}&longitude=${activeLng}&current=temperature_2m,relative_humidity_2m,rain,weather_code,wind_speed_10m&timezone=auto`)
       .then(res => {
         if (!res.ok) throw new Error('API down');
@@ -149,7 +152,6 @@ export function CheckoutScreen({ onNavigate }: Props) {
           } else {
             text = 'Optimal agricultural shipping sky';
           }
-
           setWeatherData({
             temp: `${Math.round(current.temperature_2m)}°C`,
             humidity: `${current.relative_humidity_2m}%`,
@@ -162,9 +164,8 @@ export function CheckoutScreen({ onNavigate }: Props) {
         setIsWeatherLoading(false);
       })
       .catch(err => {
-        console.warn('Weather API fetch failed, loading static seasonal averages', err);
+        console.warn('Weather API fetch failed', err);
         setWeatherError(true);
-        // Fallback robust simulation based on latitude
         const isNorth = activeLat > 8; 
         setWeatherData({
           temp: isNorth ? '34°C' : '28°C',
@@ -178,7 +179,20 @@ export function CheckoutScreen({ onNavigate }: Props) {
       });
   }, [activeLat, activeLng]);
 
-  // Bank Transfer Sandbox countdown clock logic
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setCartLoading(false);
+      return;
+    }
+    setCartLoading(true);
+    const unsubscribe = subscribeToCart(uid, (items) => {
+      setCartItems(items);
+      setCartLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (showGateway && payMethod === 'bank') {
@@ -195,9 +209,6 @@ export function CheckoutScreen({ onNavigate }: Props) {
     return () => clearInterval(timer);
   }, [showGateway, payMethod]);
 
-
-
-  // Run pay operation
   const handleCheckoutSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setShowGateway(true);
@@ -207,7 +218,6 @@ export function CheckoutScreen({ onNavigate }: Props) {
     setUssdStep(1);
   };
 
-  // Card payment flows trigger OTP
   const handlePaystackCardSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (cardNumber.length < 12) {
@@ -227,70 +237,80 @@ export function CheckoutScreen({ onNavigate }: Props) {
     setTimeout(async () => {
       setGatewayStage('success');
 
-      // Log payment audit action to Firestore
       logUserAction('CHECKOUT_PAYMENT_SUCCESS', 'Consumer finalized checkout payment with Credit Card', {
         amount: orderTotal,
         destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
         distance: distanceInKm
       });
       try {
+        // ── FIX: use extractFarmerUid to get the real farmer UID ──────────────
         await createOrder({
-          farmerUid: 'unassigned', // TODO: requires cart refactor — see note
+          farmerUid: extractFarmerUid(cartItems),
           buyerUid: auth.currentUser?.uid || 'guest',
           buyerName: recipientName,
           buyerPhone: recipientPhone,
           buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-          product: 'Cart items',
+          product: cartItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
           amount: orderTotal,
-          items: 3,
+          items: cartItems.length,
+          cartItems: cartItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
           paymentMethod: 'card',
         });
+        // ─────────────────────────────────────────────────────────────────────
+        const uid = auth.currentUser?.uid;
+        if (uid) await clearCart(uid);
       } catch (err) {
         console.error('createOrder failed (card):', err);
       }
 
-      setTimeout(() => {
+      setTimeout(async () => {
+        const uid = auth.currentUser?.uid;
+        if (uid) await clearCart(uid).catch(() => {});
         setShowGateway(false);
         setDone(true);
       }, 1500);
     }, 2000);
   };
 
-  // Fast verify bank payment transfer
   const triggerVerifyTransfer = () => {
     setTransferCheckedStatus('verifying');
     setTimeout(async () => {
       setTransferCheckedStatus('found');
 
-      // Log payment audit action to Firestore
       logUserAction('CHECKOUT_TRANSFER_SUCCESS', 'Consumer finalized checkout payment with Bank Transfer', {
         amount: orderTotal,
         destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
         distance: distanceInKm
       });
       try {
+        // ── FIX: use extractFarmerUid ─────────────────────────────────────────
         await createOrder({
-          farmerUid: 'unassigned',
+          farmerUid: extractFarmerUid(cartItems),
           buyerUid: auth.currentUser?.uid || 'guest',
           buyerName: recipientName,
           buyerPhone: recipientPhone,
           buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-          product: 'Cart items',
+          product: cartItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
           amount: orderTotal,
-          items: 3,
+          items: cartItems.length,
+          cartItems: cartItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
           paymentMethod: 'bank',
         });
+        // ─────────────────────────────────────────────────────────────────────
+        const uid = auth.currentUser?.uid;
+        if (uid) await clearCart(uid);
       } catch (err) {
         console.error('createOrder failed (bank):', err);
       }
-      setTimeout(() => {
+      setTimeout(async () => {
+        const uid = auth.currentUser?.uid;
+        if (uid) await clearCart(uid).catch(() => {});
         setShowGateway(false);
         setDone(true);
       }, 1500);
     }, 2000);
   };
 
-  // USSD Dial helper trigger
   const runUSSDDialTrigger = () => {
     setUssdStep(2);
   };
@@ -298,7 +318,6 @@ export function CheckoutScreen({ onNavigate }: Props) {
   const handleUSSDSuccessConfirm = async () => {
     setUssdStep(3);
 
-    // Log payment audit action to Firestore
     logUserAction('CHECKOUT_USSD_SUCCESS', 'Consumer finalized checkout payment with USSD Dial code', {
       amount: orderTotal,
       destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
@@ -306,22 +325,28 @@ export function CheckoutScreen({ onNavigate }: Props) {
     });
 
     try {
+      // ── FIX: use extractFarmerUid ───────────────────────────────────────────
       await createOrder({
-        farmerUid: 'unassigned', // TODO: requires cart refactor — see note
+        farmerUid: extractFarmerUid(cartItems),
         buyerUid: auth.currentUser?.uid || 'guest',
         buyerName: recipientName,
         buyerPhone: recipientPhone,
         buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-        product: 'Cart items',
+        product: cartItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
         amount: orderTotal,
-        items: 3,
+        items: cartItems.length,
+        cartItems: cartItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
         paymentMethod: 'ussd',
       });
+      // ───────────────────────────────────────────────────────────────────────
+      const uid = auth.currentUser?.uid;
+      if (uid) await clearCart(uid);
     } catch (err) {
       console.error('createOrder failed (ussd):', err);
     }
-
-    setTimeout(() => {
+    setTimeout(async () => {
+      const uid = auth.currentUser?.uid;
+      if (uid) await clearCart(uid).catch(() => {});
       setShowGateway(false);
       setDone(true);
     }, 1500);
@@ -329,676 +354,411 @@ export function CheckoutScreen({ onNavigate }: Props) {
 
   if (done) {
     return (
-      <div className="p-5 lg:p-6 max-w-md mx-auto flex flex-col items-center justify-center min-h-[75vh]" id="checkout-finished-container">
+      <div className="p-5 lg:p-6 max-w-md mx-auto flex flex-col items-center justify-center min-h-[75vh]">
         <div className="w-20 h-20 rounded-full flex items-center justify-center mb-5 animate-bounce" style={{ background: 'rgba(39, 80, 10, 0.12)' }}>
           <CheckCircle size={44} style={{ color: '#27500A' }} />
         </div>
         <h1 className="text-2xl font-semibold mb-2 tracking-tight text-center" style={{ color: '#27500A' }}>Payment Approved!</h1>
         <p className="text-sm text-gray-600 text-center mb-6">
-          Your payment of <span className="font-semibold text-gray-900">₦{orderTotal.toLocaleString()}</span> has been confirmed by the Interswitch network.
+          Your payment of <span className="font-semibold text-gray-900">₦{orderTotal.toLocaleString()}</span> has been confirmed.
         </p>
-        
         <div className="backdrop-blur-md bg-white/70 rounded-2xl p-5 w-full mb-6 border border-black/5 shadow-sm space-y-3">
           <div className="flex justify-between items-center text-xs">
             <span className="text-gray-500">Transaction ID</span>
-            <span className="font-mono font-medium text-gray-800">ISW-90218-AF</span>
+            <span className="font-mono font-medium text-gray-800">FMX-{Date.now().toString().slice(-8)}</span>
           </div>
           <div className="flex justify-between items-center text-xs">
-            <span className="text-gray-500">Escrow Address</span>
-            <span className="font-medium text-gray-850 truncate max-w-[200px]" title={`${streetAddress}, ${selectedCityName}, ${selectedState}`}>
-              {streetAddress}, {selectedCityName}, {selectedState}
-            </span>
+            <span className="text-gray-500">Delivery to</span>
+            <span className="font-medium text-gray-850 truncate max-w-[200px]">{streetAddress}, {selectedCityName}, {selectedState}</span>
           </div>
           <div className="flex justify-between items-center text-xs">
-            <span className="text-gray-500">Delivery Zone</span>
-            <span className="font-medium text-gray-800">{selectedState} State</span>
-          </div>
-          <div className="flex justify-between items-center text-xs">
-            <span className="text-gray-500">Transit Weather</span>
-            <span className="font-medium text-blue-600 flex items-center gap-1">
-              <CloudRain size={12} /> {weatherData.temp} ({weatherData.rain})
-            </span>
+            <span className="text-gray-500">Amount</span>
+            <span className="font-semibold text-emerald-800">₦{orderTotal.toLocaleString()}</span>
           </div>
         </div>
-
-        <button onClick={() => onNavigate('order-tracking')} className="w-full rounded-xl py-3 mb-3 bg-[#0C447C] hover:bg-[#185FA5] text-white text-sm font-medium transition-all shadow-sm">
-          Track Delivery Status
+        <button
+          onClick={() => onNavigate('order-tracking')}
+          className="w-full rounded-xl py-3 font-semibold text-sm text-white transition-all active:scale-[0.98]"
+          style={{ background: '#27500A' }}
+        >
+          Track my order →
         </button>
-        <button onClick={() => onNavigate('marketplace')} className="w-full rounded-xl py-3 border border-black/10 hover:bg-black/5 text-gray-600 text-sm font-medium transition-all">
-          Back to Farmer Market
+        <button
+          onClick={() => onNavigate('marketplace')}
+          className="mt-3 text-xs text-gray-500 underline"
+        >
+          Continue shopping
         </button>
       </div>
     );
   }
 
+  if (cartLoading) {
+    return (
+      <div className="p-5 lg:p-6 max-w-md mx-auto flex items-center justify-center min-h-[50vh]">
+        <RefreshCw size={28} className="animate-spin" style={{ color: '#185FA5' }} />
+      </div>
+    );
+  }
+
+  if (cartItems.length === 0) {
+    return (
+      <div className="p-5 lg:p-6 max-w-md mx-auto text-center py-20">
+        <span style={{ fontSize: 48 }}>🛒</span>
+        <p style={{ fontSize: 16, color: '#5F5E5A', marginTop: 12 }}>Your cart is empty</p>
+        <button onClick={() => onNavigate('marketplace')} className="mt-4 px-6 py-2 rounded-lg"
+          style={{ background: '#185FA5', color: '#fff', fontSize: 13 }}>Browse marketplace</button>
+      </div>
+    );
+  }
+
   return (
-    <div className="p-4 lg:p-6 max-w-6xl mx-auto" id="checkout-main-container">
-      {/* Navigation Headers */}
-      <div className="flex items-center justify-between mb-6">
-        <button onClick={() => onNavigate('cart')} className="flex items-center gap-1.5 text-xs text-gray-600 hover:text-black transition-all">
-          <ChevronLeft size={16} /> Back to my basket
-        </button>
-        <div className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-ping" />
-          <span className="text-xs text-gray-500">Escrow Protected Checkout</span>
-        </div>
+    <div className="p-5 lg:p-6 max-w-4xl mx-auto">
+      <button onClick={() => onNavigate('cart')} className="flex items-center gap-1.5 mb-5 text-xs"
+        style={{ color: '#5F5E5A' }}>
+        <ChevronLeft size={15} /> Back to cart
+      </button>
+
+      <div className="mb-6">
+        <h1 style={{ fontSize: 22, fontWeight: 500, color: '#0C447C' }}>Checkout</h1>
+        <p style={{ fontSize: 13, color: '#5F5E5A' }}>{cartItems.length} item{cartItems.length !== 1 ? 's' : ''} · ₦{orderTotal.toLocaleString()} total</p>
       </div>
 
-      <div className="mb-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-850">Checkout</h1>
-          <p className="text-xs text-gray-500 mt-1">Provide your shipping address, select delivery speed, and make secure payment.</p>
-        </div>
-      </div>
-
-      {/* Main Grid Checkout Layout */}
-      <form onSubmit={handleCheckoutSubmit} className="grid lg:grid-cols-3 gap-6" id="checkout-form-details">
-        {/* Left Columns - Delivery Route & API settings */}
+      <div className="grid lg:grid-cols-3 gap-6">
+        {/* Delivery form */}
         <div className="lg:col-span-2 space-y-4">
-          
-          {/* Section 1: Delivery Address & Dispatch Speed Selection */}
-          <div className="backdrop-blur-md bg-white/75 rounded-2xl p-5 border border-black/10 shadow-sm relative overflow-hidden" id="maps-card-panel">
-            <div className="mb-4">
-              <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-1.5">
-                <MapPin size={16} className="text-emerald-700" /> Delivery Address Details
-              </h2>
-              <p className="text-[11px] text-gray-500 mt-0.5">Please provide your contact details, destination state, city, and exact street address for safe escrow delivery.</p>
-            </div>
-
-            {/* Recipient Details Row */}
-            <div className="grid md:grid-cols-2 gap-3 mb-4">
-              <div>
-                <label className="text-[11px] font-medium text-gray-500 block mb-1">Recipient Name</label>
-                <input
-                  type="text"
-                  value={recipientName}
-                  onChange={(e) => setRecipientName(e.target.value)}
-                  placeholder="Enter full name..."
-                  className="w-full h-9 px-3 rounded-lg text-xs bg-gray-50 border border-black/15 outline-none focus:ring-1 focus:ring-green-500 text-gray-700"
-                  required
-                />
-              </div>
-              <div>
-                <label className="text-[11px] font-medium text-gray-500 block mb-1">Active Contact Number</label>
-                <input
-                  type="text"
-                  value={recipientPhone}
-                  onChange={(e) => setRecipientPhone(e.target.value)}
-                  placeholder="E.g. +234 803 123 4567"
-                  className="w-full h-9 px-3 rounded-lg text-xs bg-gray-50 border border-black/15 outline-none focus:ring-1 focus:ring-green-500 text-gray-700"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Address Auto preset / dropdown and input fields */}
-            <div className="grid md:grid-cols-3 gap-3 mb-4">
-              <div>
-                <label className="text-[11px] font-medium text-gray-500 block mb-1">Delivery State</label>
-                <input
-                  type="text"
-                  value={selectedState}
-                  onChange={(e) => setSelectedState(e.target.value)}
-                  placeholder="E.g. Lagos, Oyo, Kano..."
-                  className="w-full h-9 px-3 rounded-lg text-xs bg-gray-50 border border-black/15 outline-none focus:ring-1 focus:ring-green-500 text-gray-700"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-medium text-gray-500 block mb-1">City / Town</label>
-                <input
-                  type="text"
-                  value={selectedCityName}
-                  onChange={(e) => setSelectedCityName(e.target.value)}
-                  className="w-full h-9 px-3 rounded-lg text-xs bg-gray-50 border border-black/15 outline-none focus:ring-1 focus:ring-green-500 text-gray-700"
-                  placeholder="E.g. Lekki, Ikeja, Zaria"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-medium text-gray-500 block mb-1">Street Address</label>
-                <input
-                  type="text"
-                  value={streetAddress}
-                  onChange={(e) => setStreetAddress(e.target.value)}
-                  placeholder="E.g. Apartment, suite, house number"
-                  className="w-full h-9 px-3 rounded-lg text-xs bg-gray-50 border border-black/15 outline-none focus:ring-1 focus:ring-green-500 text-gray-700"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Delivery Methods Options select directly */}
-            <div className="mb-4">
-              <label className="text-[11px] font-medium text-gray-500 block mb-1.5">Select Delivery Speed</label>
-              <div className="grid sm:grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setDeliverySpeed('standard')}
-                  className={`p-3 rounded-xl border text-left transition flex justify-between items-center ${deliverySpeed === 'standard' ? 'border-[#27500A] bg-emerald-50 bg-opacity-30' : 'border-black/5 hover:border-black/15'}`}
-                >
-                  <div>
-                    <span className="font-semibold text-xs block text-slate-800">Standard Secure Dispatch</span>
-                    <span className="text-[10px] text-gray-500 mt-0.5 block">Estimated delivery in 3 to 5 business days</span>
-                  </div>
-                  <span className="text-xs font-mono font-medium text-gray-700">₦{baseLogisticsFee.toLocaleString()}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setDeliverySpeed('express')}
-                  className={`p-3 rounded-xl border text-left transition flex justify-between items-center ${deliverySpeed === 'express' ? 'border-[#0C447C] bg-blue-50 bg-opacity-30' : 'border-black/5 hover:border-black/15'}`}
-                >
-                  <div>
-                    <span className="font-semibold text-xs block text-[#0C447C] flex items-center gap-1">
-                      Express Smart Shipping <Sparkles size={11} className="text-yellow-500" />
-                    </span>
-                    <span className="text-[10px] text-gray-500 mt-0.5 block">Delivered in 1 to 2 days, priority packing</span>
-                  </div>
-                  <span className="text-xs font-mono font-bold text-[#0C447C]">₦{(baseLogisticsFee + 1500).toLocaleString()}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Address Summary details */}
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 mb-4 text-xs">
-              <div className="bg-slate-100 bg-opacity-70 rounded-xl p-3 border border-black/5">
-                <span className="text-gray-500 block text-[10px]">Destination State</span>
-                <span className="font-semibold text-slate-850 truncate max-w-full block mt-0.5">{selectedState || 'Not specified'}</span>
-              </div>
-              <div className="bg-slate-100 bg-opacity-70 rounded-xl p-3 border border-black/5">
-                <span className="text-gray-500 block text-[10px]">City / Town</span>
-                <span className="font-semibold text-slate-850 truncate max-w-full block mt-0.5">{selectedCityName || 'Not specified'}</span>
-              </div>
-              <div className="bg-slate-100 bg-opacity-70 rounded-xl p-3 border border-black/5">
-                <span className="text-gray-500 block text-[10px]/[14px]">Dispatch Service</span>
-                <span className="font-semibold text-gray-800 block mt-0.5 capitalize">
-                  {deliverySpeed} shipping
-                </span>
-              </div>
-            </div>
-
-            {/* Weather forecasting Live API Integration Box */}
-            <div className={`p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all border ${weatherData.code >= 51 ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 bg-opacity-60 border-emerald-100'}`} id="weather-api-box">
-              <div className="flex gap-3">
-                <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ${weatherData.code >= 51 ? 'bg-amber-600 text-white' : 'bg-emerald-700 text-white'}`}>
-                  {isWeatherLoading ? (
-                    <RefreshCw size={20} className="animate-spin text-white" />
-                  ) : (
-                    <CloudRain size={20} className="animate-pulse" />
-                  )}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xs font-semibold text-gray-800 uppercase tracking-wider">Live Transit Weather Advisory</h3>
-                    {isWeatherLoading && <span className="text-[9px] text-gray-400">updating API...</span>}
-                    {weatherError && <span className="text-[9px] text-red-500 font-mono italic">weather offline mode</span>}
-                  </div>
-                  <p className="text-[11px] text-gray-600 font-medium mt-0.5">{weatherData.statusText}</p>
-                  <p className="text-[10px] text-gray-500 mt-1 leading-normal">
-                    {weatherData.code >= 51 
-                      ? '⚠️ Mud risk warnings active on unpaved village collector roads. Farmer will securely pack items in heavy military-grade moisture-seal crates.' 
-                      : '✅ Warm, wind-safe clearway values analyzed. Crop moisture loading is stable. Perfect transportation condition for open-bed agro carriage.'}
-                  </p>
-                </div>
-              </div>
-
-              {/* Weather statistics columns */}
-              <div className="flex gap-4 self-center md:self-auto flex-shrink-0 text-center font-mono">
-                <div className="px-2.5 py-1 text-xs">
-                  <span className="text-gray-400 block text-[9px] lowercase font-sans">Temp</span>
-                  <span className="font-bold text-gray-700">{weatherData.temp}</span>
-                </div>
-                <div className="px-2.5 py-1 text-xs border-l border-gray-200">
-                  <span className="text-gray-400 block text-[9px] lowercase font-sans">Raindepth</span>
-                  <span className="font-bold text-gray-750">{weatherData.rain}</span>
-                </div>
-                <div className="px-2.5 py-1 text-xs border-l border-gray-200">
-                  <span className="text-gray-400 block text-[9px] lowercase font-sans">Wind</span>
-                  <span className="font-bold text-gray-700">{weatherData.wind}</span>
-                </div>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Section 2: Farm Escrow Safeguard Details */}
-          <div className="backdrop-blur-md bg-white/70 rounded-2xl p-5 border border-black/10 shadow-sm" id="escrow-safeguard-panel">
-            <div className="flex items-start gap-3">
-              <div className="w-9 h-9 rounded-xl bg-[#27500A]/10 flex items-center justify-center text-[#27500A] flex-shrink-0 mt-0.5">
-                <Shield size={16} />
-              </div>
-              <div>
-                <h2 className="text-sm font-semibold text-gray-800">FarmX Two-Way Escrow Policy</h2>
-                <p className="text-[11px] text-gray-500 leading-normal mt-1">
-                  Once your payment is approved, your funds are secured in a decentralized escrow smart settlement contract. 
-                  The farmer receives the money only AFTER you physically receive the crops and tap "Confirm delivery" in your Order Tracking center.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Order Summary & Interactive Payment Trigger */}
-        <div className="space-y-4">
-          <div className="backdrop-blur-md bg-white/75 rounded-2xl p-5 border border-black/10 shadow-lg sticky top-6" id="payment-trigger-panel">
-            <h2 className="text-sm font-semibold text-gray-850 mb-3 border-b border-black/10 pb-2">Order summary</h2>
-            
-            <div className="space-y-2.5 mb-4">
+          {/* Weather strip */}
+          <div className="rounded-xl p-3 flex items-center gap-4" style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.2)' }}>
+            <div className="flex items-center gap-3 flex-1 flex-wrap">
               {[
-                { title: 'Roma Tomatoes', q: '5kg', p: 3500 },
-                { title: 'Maize (Dried white)', q: '10kg', p: 3500 },
-                { title: 'White Onions', q: '3kg', p: 1350 }
-              ].map(item => (
-                <div key={item.title} className="flex justify-between text-xs">
-                  <span className="text-gray-600 block">{item.title} ({item.q})</span>
-                  <span className="font-mono text-gray-800">₦{item.p.toLocaleString()}</span>
+                { icon: Thermometer, label: weatherData.temp },
+                { icon: Droplets, label: weatherData.humidity },
+                { icon: CloudRain, label: weatherData.rain },
+                { icon: Wind, label: weatherData.wind },
+              ].map(({ icon: Icon, label }) => (
+                <div key={label} className="flex items-center gap-1">
+                  <Icon size={12} style={{ color: '#185FA5' }} />
+                  <span style={{ fontSize: 11, color: '#185FA5' }}>{label}</span>
                 </div>
               ))}
             </div>
+            <span style={{ fontSize: 10, color: '#0C447C', fontWeight: 500 }}>{weatherData.statusText}</span>
+          </div>
 
-            {/* Calculations Area */}
-            <div className="border-t border-black/10 pt-3 space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Cart Subtotal</span>
-                <span className="font-mono text-gray-700">₦{orderSubtotal.toLocaleString()}</span>
+          <div className="rounded-xl p-5 space-y-4" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
+            <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Delivery details</h2>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 6 }}>Recipient name</label>
+                <input value={recipientName} onChange={e => setRecipientName(e.target.value)}
+                  placeholder="Full name"
+                  className="w-full px-3 rounded-lg outline-none"
+                  style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
               </div>
-              <div className="flex justify-between items-center bg-blue-50/50 p-2 rounded-lg border border-blue-100">
-                <div>
-                  <span className="text-blue-800 font-medium block">Logistics Surcharge</span>
-                  <span className="text-[9px] text-[#0C447C]">Standard dispatch shipping fee</span>
+              <div>
+                <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 6 }}>Phone number</label>
+                <input value={recipientPhone} onChange={e => setRecipientPhone(e.target.value)}
+                  placeholder="+234 800 000 0000"
+                  className="w-full px-3 rounded-lg outline-none"
+                  style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 6 }}>State</label>
+                <select value={selectedState} onChange={e => setSelectedState(e.target.value)}
+                  className="w-full px-3 rounded-lg outline-none"
+                  style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }}>
+                  {NIGERIAN_STATES.map(s => <option key={s.name}>{s.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 6 }}>City / LGA</label>
+                <input value={selectedCityName} onChange={e => setSelectedCityName(e.target.value)}
+                  placeholder="e.g. Ikeja"
+                  className="w-full px-3 rounded-lg outline-none"
+                  style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 6 }}>Street address</label>
+              <input value={streetAddress} onChange={e => setStreetAddress(e.target.value)}
+                placeholder="House/Block number, street name"
+                className="w-full px-3 rounded-lg outline-none"
+                style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+            </div>
+
+            {/* Delivery speed */}
+            <div className="grid grid-cols-2 gap-3">
+              {(['standard', 'express'] as const).map(speed => (
+                <button key={speed} onClick={() => setDeliverySpeed(speed)}
+                  className="rounded-xl p-3 text-left transition-all"
+                  style={{
+                    border: `${deliverySpeed === speed ? '1px' : '0.5px'} solid ${deliverySpeed === speed ? '#185FA5' : 'rgba(0,0,0,0.1)'}`,
+                    background: deliverySpeed === speed ? '#E6F1FB' : '#F7F6F2',
+                  }}>
+                  <p style={{ fontSize: 12, fontWeight: 500, color: deliverySpeed === speed ? '#0C447C' : '#444441' }}>
+                    {speed === 'standard' ? '🚛 Standard' : '⚡ Express'}
+                  </p>
+                  <p style={{ fontSize: 10, color: '#5F5E5A' }}>
+                    {speed === 'standard' ? '3–5 business days' : '1–2 business days'}
+                  </p>
+                  <p style={{ fontSize: 11, fontWeight: 500, color: '#185FA5', marginTop: 4 }}>
+                    ₦{(speed === 'standard' ? baseLogisticsFee : baseLogisticsFee + 500).toLocaleString()}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Cart items preview */}
+          <div className="rounded-xl p-5" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
+            <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441', marginBottom: 12 }}>Items in order</h2>
+            <div className="space-y-3">
+              {cartItems.map(item => (
+                <div key={item.id} className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden"
+                    style={{ background: '#F7F6F2', fontSize: 22 }}>
+                    {item.image ? <img src={item.image} alt={item.name} className="w-full h-full object-cover" /> : (item.emoji || '🌾')}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p style={{ fontSize: 13, fontWeight: 500, color: '#444441' }}>{item.name}</p>
+                    <p style={{ fontSize: 11, color: '#5F5E5A' }}>{item.farmerName} · {item.qty} {item.unit}</p>
+                  </div>
+                  <p style={{ fontSize: 13, fontWeight: 500, color: '#444441' }}>₦{(item.price * item.qty).toLocaleString()}</p>
                 </div>
-                <span className="font-mono text-blue-900 font-semibold">₦{calcDeliveryFee.toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Packing & Risk Insurance</span>
-                <span className="font-mono text-gray-700">₦{platformFee}</span>
-              </div>
-              <div className="flex justify-between border-t border-black/10 pt-2 text-sm font-semibold">
-                <span className="text-gray-850">Total Payable</span>
-                <span className="font-mono text-blue-800">₦{orderTotal.toLocaleString()}</span>
-              </div>
-            </div>
-
-            <div className="mt-4 p-3 rounded-xl bg-orange-50 text-[10px] text-orange-850 flex gap-2 border border-orange-100 leading-normal" id="checkout-meta-notice">
-              <Info size={14} className="text-orange-700 flex-shrink-0" />
-              <p>Escrow protects your cash! Funds are locked safely. Disbursal code executes immediately upon delivery verification.</p>
-            </div>
-
-            {/* CTA action button */}
-            <button
-              type="submit"
-              className="w-full mt-4 py-3 rounded-xl bg-[#0C447C] hover:bg-[#185FA5] hover:shadow-md text-white md:text-sm text-xs font-semibold transition-all cursor-pointer active:scale-[0.98] flex items-center justify-center gap-2"
-            >
-              <span>Secure Gateway Payment</span>
-              <ArrowRight size={14} />
-            </button>
-            <div className="flex items-center justify-center gap-1 mt-3">
-              <ShieldCheck size={12} className="text-gray-400" />
-              <span className="text-[10px] text-gray-400 font-mono uppercase tracking-wide">PCI-DSS Compliant Endpoint</span>
+              ))}
             </div>
           </div>
         </div>
-      </form>
 
-      {/* Embedded High Fidelity Interswitch / Paystack Sandbox Checkout Overlay Popup */}
-      {showGateway && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto" id="payment-gateway-modal">
-          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden border border-black/10 transform scale-100 transition-all">
-            
-            {/* Header section styled elegantly like high-end banks/fintech page */}
-            <div className="bg-gradient-to-r from-emerald-800 to-green-700 p-5 text-white flex justify-between items-center relative">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-lg">
-                  🇳🇬
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold tracking-tight uppercase">Interswitch WebPay Sandbox</h3>
-                  <p className="text-[10px] text-white/70">Payment Portal ID: SW-281-AF</p>
+        {/* Summary + pay */}
+        <div>
+          <div className="rounded-xl p-4 sticky top-6" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
+            <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441', marginBottom: 12 }}>Order summary</h2>
+            <div className="space-y-2.5 mb-4">
+              <div className="flex justify-between">
+                <span style={{ fontSize: 13, color: '#5F5E5A' }}>Subtotal</span>
+                <span style={{ fontSize: 13, color: '#444441' }}>₦{orderSubtotal.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span style={{ fontSize: 13, color: '#5F5E5A' }}>Delivery ({deliverySpeed})</span>
+                <span style={{ fontSize: 13, color: '#444441' }}>₦{calcDeliveryFee.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between">
+                <span style={{ fontSize: 13, color: '#5F5E5A' }}>Platform fee</span>
+                <span style={{ fontSize: 13, color: '#444441' }}>₦{platformFee.toLocaleString()}</span>
+              </div>
+              <div className="pt-2" style={{ borderTop: '0.5px solid rgba(0,0,0,0.1)' }}>
+                <div className="flex justify-between">
+                  <span style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Total</span>
+                  <span style={{ fontSize: 14, fontWeight: 500, color: '#185FA5' }}>₦{orderTotal.toLocaleString()}</span>
                 </div>
               </div>
-              <button 
-                type="button" 
-                onClick={() => {
-                  setShowGateway(false);
-                  setGatewayStage('input');
-                }} 
-                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white transition cursor-pointer"
-                aria-label="Cancel transaction"
-              >
-                <X size={16} />
+            </div>
+
+            <div className="flex gap-2 p-2.5 rounded-lg mb-4" style={{ background: '#EAF3DE' }}>
+              <Info size={13} style={{ color: '#27500A', flexShrink: 0, marginTop: 1 }} />
+              <p style={{ fontSize: 10, color: '#27500A', lineHeight: 1.5 }}>
+                Payment held in escrow until you confirm delivery. 3% platform fee deducted from farmer payout.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 mb-4">
+              <Shield size={13} style={{ color: '#27500A' }} />
+              <span style={{ fontSize: 11, color: '#5F5E5A' }}>Buyer protection guaranteed</span>
+            </div>
+
+            <button
+              onClick={handleCheckoutSubmit}
+              disabled={!recipientName || !streetAddress || !selectedCityName}
+              className="w-full rounded-lg py-2.5 transition-all active:scale-[0.98] disabled:opacity-50"
+              style={{ background: '#185FA5', color: '#fff', fontSize: 13, fontWeight: 500 }}
+            >
+              Proceed to payment →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Payment Gateway Modal */}
+      {showGateway && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
+          <div className="w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: '#fff', maxHeight: '90vh', overflowY: 'auto' }}>
+            <div className="flex items-center justify-between p-4" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}>
+              <div>
+                <p style={{ fontSize: 13, fontWeight: 500, color: '#444441' }}>Secure payment</p>
+                <p style={{ fontSize: 11, color: '#5F5E5A' }}>₦{orderTotal.toLocaleString()}</p>
+              </div>
+              <button onClick={() => setShowGateway(false)} aria-label="Close payment">
+                <X size={18} style={{ color: '#5F5E5A' }} />
               </button>
             </div>
 
-            {/* Merchant detail bar */}
-            <div className="bg-slate-50 px-5 py-3 border-b border-black/5 flex justify-between items-center text-xs text-gray-600">
-              <div>
-                <span className="text-[10px] text-gray-400 block uppercase font-bold tracking-wider">Merchant</span>
-                <span className="font-semibold text-gray-800 flex items-center gap-1">🌾 FarmX Cooperative Ltd</span>
+            {gatewayStage === 'success' ? (
+              <div className="p-8 text-center">
+                <CheckCircle size={48} style={{ color: '#27500A', margin: '0 auto 12px' }} />
+                <p style={{ fontSize: 16, fontWeight: 500, color: '#27500A' }}>Payment successful!</p>
+                <p style={{ fontSize: 12, color: '#5F5E5A', marginTop: 4 }}>Redirecting you to order tracking…</p>
               </div>
-              <div className="text-right">
-                <span className="text-[10px] text-gray-400 block uppercase font-bold tracking-wider">Transaction Amount</span>
-                <span className="font-mono font-bold text-emerald-800 text-sm">₦{orderTotal.toLocaleString()}</span>
-              </div>
-            </div>
-
-            {/* Gateway Body content handles multiple stages dynamically */}
-            {gatewayStage === 'submitting' ? (
-              <div className="p-10 flex flex-col items-center justify-center min-h-[300px]">
-                <RefreshCw size={44} className="text-emerald-700 animate-spin mb-4" />
-                <h4 className="text-sm font-semibold text-gray-800">Processing Secure Transaction...</h4>
-                <p className="text-xs text-gray-500 mt-1 max-w-sm text-center">Contacting card issuing bank and verifying central switch escrow ledger. Do not close this browser window.</p>
-              </div>
-            ) : gatewayStage === 'success' ? (
-              <div className="p-10 flex flex-col items-center justify-center min-h-[300px]" id="gateway-stage-success">
-                <div className="w-16 h-16 rounded-full bg-emerald-100 flex items-center justify-center mb-4 text-emerald-700">
-                  <CheckCircle size={36} />
-                </div>
-                <h4 className="text-sm font-semibold text-emerald-900 uppercase tracking-widest">Transaction Approved</h4>
-                <p className="text-xs text-gray-500 mt-1 text-center">Receipt sent to email. Returning back to merchant portal...</p>
+            ) : gatewayStage === 'submitting' ? (
+              <div className="p-8 text-center">
+                <RefreshCw size={36} className="animate-spin mx-auto mb-4" style={{ color: '#185FA5' }} />
+                <p style={{ fontSize: 13, color: '#5F5E5A' }}>Processing payment…</p>
               </div>
             ) : gatewayStage === 'otp' ? (
-              // OTP SMS Code verification gate simulation
-              <form onSubmit={handleVerifyOtp} className="p-6 space-y-4" id="gateway-stage-otp">
-                <div className="p-4 rounded-2xl bg-blue-50 border border-blue-105 text-[#0C447C] flex gap-3">
-                  <Shield size={18} className="flex-shrink-0 text-blue-700" />
-                  <div className="text-xs">
-                    <p className="font-semibold">Interswitch SafeToken System</p>
-                    <p className="text-gray-600 mt-1">
-                      A unique One-Time-Password (SafeToken) has been generated and dispatched to your phone linked to this card/bank account (+234 803 **** 8821).
-                    </p>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-semibold text-gray-500 block mb-1">Enter 6-Digit OTP</label>
+              <div className="p-5 space-y-4">
+                <p style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Enter OTP</p>
+                <p style={{ fontSize: 12, color: '#5F5E5A' }}>A one-time code was sent to your registered phone number.</p>
+                <form onSubmit={handleVerifyOtp} className="space-y-3">
                   <input
-                    type="password"
-                    maxLength={6}
                     value={otpValue}
-                    onChange={(e) => setOtpValue(e.target.value)}
-                    placeholder="E.g. 123456"
-                    className="w-full h-11 px-4 rounded-xl text-center text-lg font-mono tracking-[0.5rem] bg-gray-50 border border-black/15 outline-none focus:ring-1 focus:ring-emerald-700 text-gray-800"
-                    required
+                    onChange={e => setOtpValue(e.target.value)}
+                    placeholder="• • • • • •"
+                    maxLength={6}
+                    className="w-full px-3 rounded-lg outline-none text-center tracking-widest font-mono"
+                    style={{ height: 44, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 20, color: '#444441', background: '#F7F6F2' }}
                   />
-                  <p className="text-[10px] text-gray-400 text-center mt-1.5 font-mono">Any 6-digit test code works to simulate approvals</p>
-                </div>
-
-                <div className="flex gap-3 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setGatewayStage('input')}
-                    className="flex-1 py-2.5 rounded-xl border border-black/10 text-gray-600 text-xs font-semibold cursor-pointer"
-                  >
-                    Back
+                  <button type="submit" disabled={otpValue.length < 4}
+                    className="w-full rounded-lg py-2.5 font-medium disabled:opacity-50"
+                    style={{ background: '#185FA5', color: '#fff', fontSize: 13 }}>
+                    Verify OTP
                   </button>
-                  <button
-                    type="submit"
-                    className="flex-1 py-2.5 rounded-xl bg-emerald-800 text-white text-xs font-semibold hover:bg-emerald-900 transition-all cursor-pointer"
-                  >
-                    Submit Code
-                  </button>
-                </div>
-              </form>
+                </form>
+              </div>
             ) : (
-              // Gateway input tab screens
-              <div className="flex flex-col md:flex-row min-h-[340px]" id="gateway-channels-wrapper">
-                {/* Method selector sidebar */}
-                <div className="md:w-1/3 bg-slate-50 border-r border-black/5 flex md:flex-col flex-row overflow-x-auto">
-                  {[
-                    { id: 'card', name: 'Card Pay', desc: 'Secure ATM card', icon: CreditCard },
-                    { id: 'bank', name: 'Bank Transfer', desc: 'Instant escrow escrow', icon: Building },
-                    { id: 'ussd', name: 'USSD Dial', desc: 'No internet required', icon: Phone }
-                  ].map(tab => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setPayMethod(tab.id as any)}
-                      className={`p-4 text-left border-b border-black/5 md:w-full min-w-[130px] flex flex-col transition cursor-pointer ${payMethod === tab.id ? 'bg-white border-l-4 border-l-emerald-800' : 'hover:bg-black/5'}`}
-                    >
-                      <span className="font-semibold text-xs text-gray-800 flex items-center gap-1.5">
-                        <tab.icon size={13} className={payMethod === tab.id ? 'text-emerald-850' : 'text-gray-400'} />
-                        {tab.name}
-                      </span>
-                      <span className="text-[10px] text-gray-400 block mt-1">{tab.desc}</span>
+              <div className="p-5 space-y-4">
+                {/* Pay method tabs */}
+                <div className="flex gap-1 p-1 rounded-xl" style={{ background: '#F1EFE8' }}>
+                  {(['card', 'bank', 'ussd'] as const).map(m => (
+                    <button key={m} onClick={() => setPayMethod(m)}
+                      className="flex-1 py-1.5 rounded-lg transition-all"
+                      style={{ fontSize: 11, fontWeight: payMethod === m ? 500 : 400, background: payMethod === m ? '#fff' : 'transparent', color: payMethod === m ? '#27500A' : '#5F5E5A' }}>
+                      {m === 'card' ? '💳 Card' : m === 'bank' ? '🏦 Transfer' : '📱 USSD'}
                     </button>
                   ))}
                 </div>
 
-                {/* Method details pane */}
-                <div className="flex-1 p-5 min-h-[300px]">
-                  {payMethod === 'card' && (
-                    <form onSubmit={handlePaystackCardSubmit} className="space-y-4" id="interswitch-card-form">
-                      <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Card details setup</h4>
-                      
-                      {cardError && (
-                        <div className="p-2.5 rounded-lg bg-red-50 text-red-700 text-xs flex gap-1.5 items-center">
-                          <AlertTriangle size={12} />
-                          <span>{cardError}</span>
-                        </div>
-                      )}
-
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-[10px] font-semibold text-gray-500 block mb-1">ATM Card Number</label>
-                          <input
-                            type="text"
-                            maxLength={19}
-                            value={cardNumber}
-                            onChange={(e) => {
-                              // Auto format with spaces for credit/debit card numbers
-                              const val = e.target.value.replace(/\D/g, '');
-                              const formatted = val.match(/.{1,4}/g)?.join(' ') || '';
-                              setCardNumber(formatted);
-                            }}
-                            placeholder="5061 2819 0182 2811"
-                            className="w-full h-9 px-3 rounded-lg bg-gray-50 border border-black/15 text-xs text-gray-800 outline-none focus:ring-1 focus:ring-emerald-700 font-mono"
-                            required
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[10px] font-semibold text-gray-500 block mb-1">Validity (MM/YY)</label>
-                            <input
-                              type="text"
-                              maxLength={5}
-                              value={cardExpiry}
-                              onChange={(e) => {
-                                const val = e.target.value.replace(/\D/g, '');
-                                if (val.length >= 3) {
-                                  setCardExpiry(`${val.slice(0, 2)}/${val.slice(2, 4)}`);
-                                } else {
-                                  setCardExpiry(val);
-                                }
-                              }}
-                              placeholder="12/28"
-                              className="w-full h-9 px-3 rounded-lg bg-gray-50 border border-black/15 text-xs text-gray-800 outline-none focus:ring-1 focus:ring-emerald-700 text-center font-mono"
-                              required
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-semibold text-gray-500 block mb-1">Secure CVV</label>
-                            <input
-                              type="password"
-                              maxLength={3}
-                              value={cardCvv}
-                              onChange={(e) => setCardCvv(e.target.value.replace(/\D/g, ''))}
-                              placeholder="***"
-                              className="w-full h-9 px-3 rounded-lg bg-gray-50 border border-black/15 text-xs text-gray-800 outline-none focus:ring-1 focus:ring-emerald-700 text-center font-mono"
-                              required
-                            />
-                          </div>
-                        </div>
+                {payMethod === 'card' && (
+                  <form onSubmit={handlePaystackCardSubmit} className="space-y-3">
+                    {cardError && <p style={{ fontSize: 11, color: '#A32D2D' }}>{cardError}</p>}
+                    <div>
+                      <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>Card number</label>
+                      <input value={cardNumber} onChange={e => setCardNumber(e.target.value.replace(/\D/g, '').slice(0, 16))}
+                        placeholder="0000 0000 0000 0000"
+                        className="w-full px-3 rounded-lg outline-none font-mono"
+                        style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>Expiry</label>
+                        <input value={cardExpiry} onChange={e => setCardExpiry(e.target.value)}
+                          placeholder="MM/YY"
+                          className="w-full px-3 rounded-lg outline-none font-mono"
+                          style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
                       </div>
-
-                      <div className="bg-slate-50 p-2.5 rounded-lg border border-black/5 text-[10px] text-gray-400 font-light flex items-start gap-1.5">
-                        <Lock size={12} className="text-emerald-700 flex-shrink-0 mt-0.5" />
-                        <span>FarmX encrypts your banking tokens using military-grade security tunnels (SHA-256 standard encryption keys). All data is strictly sandboxed.</span>
+                      <div>
+                        <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>CVV</label>
+                        <input value={cardCvv} onChange={e => setCardCvv(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                          placeholder="•••" type="password"
+                          className="w-full px-3 rounded-lg outline-none font-mono"
+                          style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
                       </div>
+                    </div>
+                    <button type="submit"
+                      className="w-full rounded-lg py-2.5 font-medium"
+                      style={{ background: '#185FA5', color: '#fff', fontSize: 13 }}>
+                      Pay ₦{orderTotal.toLocaleString()}
+                    </button>
+                  </form>
+                )}
 
-                      <button
-                        type="submit"
-                        className="w-full py-3 rounded-xl bg-emerald-800 text-white text-xs font-semibold hover:bg-emerald-900 transition-all flex items-center justify-center gap-1.5 shadow-sm mt-2 cursor-pointer"
-                      >
-                        <ShieldCheck size={14} />
-                        <span>Authorize card ₦{orderTotal.toLocaleString()}</span>
+                {payMethod === 'bank' && (
+                  <div className="space-y-3">
+                    <div className="rounded-xl p-4 space-y-3" style={{ background: '#F7F6F2', border: '0.5px solid rgba(0,0,0,0.1)' }}>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#5F5E5A' }}>Bank</span>
+                        <span style={{ color: '#444441', fontWeight: 500 }}>Wema Bank</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#5F5E5A' }}>Account</span>
+                        <span style={{ color: '#444441', fontWeight: 500, fontFamily: 'monospace' }}>9201882110</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#5F5E5A' }}>Amount</span>
+                        <span style={{ color: '#27500A', fontWeight: 500 }}>₦{orderTotal.toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <div className="text-center p-2 rounded-lg text-xs font-mono"
+                      style={{ background: '#FAEEDA', color: '#854F0B' }}>
+                      Expires in {transferMinutes < 10 ? `0${transferMinutes}` : transferMinutes}:{transferSeconds < 10 ? `0${transferSeconds}` : transferSeconds}
+                    </div>
+                    {transferCheckedStatus === 'found' ? (
+                      <div className="text-center py-3 rounded-xl flex items-center justify-center gap-2"
+                        style={{ background: '#EAF3DE' }}>
+                        <CheckCircle size={14} style={{ color: '#27500A' }} />
+                        <span style={{ fontSize: 12, color: '#27500A', fontWeight: 500 }}>Payment confirmed!</span>
+                      </div>
+                    ) : (
+                      <button onClick={triggerVerifyTransfer}
+                        className="w-full py-2.5 rounded-lg font-medium"
+                        style={{ background: '#27500A', color: '#fff', fontSize: 13 }}>
+                        {transferCheckedStatus === 'verifying' ? 'Verifying…' : "I've made this transfer"}
                       </button>
-                    </form>
-                  )}
+                    )}
+                  </div>
+                )}
 
-                  {payMethod === 'bank' && (
-                    <div className="space-y-4 text-xs overflow-x-auto" id="interswitch-bank-transfer-form">
-                      <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Agritech Escrow Bank settlement</h4>
-                      <p className="text-[11px] text-gray-500 leading-normal">
-                        Transfer the exact amount to the temporary automated escrow trust account allocated for your order.
-                      </p>
-
-                      <div className="bg-slate-50 rounded-xl p-4 border border-black/5 space-y-2.5 font-mono">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] text-gray-400">Beneficiary Bank</span>
-                          <span className="font-semibold text-gray-800">Providus Bank [AgriAgro Switch]</span>
-                        </div>
-                        <div className="flex justify-between items-center flex-wrap gap-1">
-                          <span className="text-[10px] text-gray-400">Account Number</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-gray-900 tracking-wider">9201882110</span>
-                          </div>
-                        </div>
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] text-gray-400">Exact Amount</span>
-                          <span className="font-bold text-emerald-800">₦{orderTotal.toLocaleString()}</span>
-                        </div>
-                      </div>
-
-                      {/* Timer */}
-                      <div className="text-center p-2 bg-orange-50 border border-orange-100 rounded-lg text-orange-900 text-[10px] font-mono flex items-center justify-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-orange-600 animate-ping" />
-                        <span>Transfer Window Expiry: {transferMinutes < 10 ? `0${transferMinutes}` : transferMinutes}:{transferSeconds < 10 ? `0${transferSeconds}` : transferSeconds}</span>
-                      </div>
-
-                      {transferCheckedStatus === 'verifying' ? (
-                        <div className="text-center py-4 space-y-2 select-none border border-black/5 rounded-xl">
-                          <RefreshCw size={24} className="animate-spin text-emerald-700 mx-auto" />
-                          <p className="text-[11px] text-gray-600">Checking central ledger switch database notifications...</p>
-                        </div>
-                      ) : transferCheckedStatus === 'found' ? (
-                        <div className="text-center py-3 bg-emerald-50 text-emerald-800 border-emerald-100 border rounded-xl flex items-center justify-center gap-2">
-                          <CheckCircle size={14} />
-                          <span className="font-semibold text-[11px]">Payment detected! Approved</span>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={triggerVerifyTransfer}
-                          className="w-full py-3 rounded-xl bg-emerald-800 text-white text-xs font-semibold hover:bg-emerald-900 transition-all flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-                        >
-                          <RefreshCw size={12} />
-                          <span>I have made this transfer</span>
+                {payMethod === 'ussd' && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      {ussdProviders.map(p => (
+                        <button key={p.id} onClick={() => { setSelectedUSSDId(p.id); setUssdStep(1); }}
+                          className="py-2 px-3 rounded-lg text-xs text-left"
+                          style={{ border: `${selectedUSSDId === p.id ? '1px' : '0.5px'} solid ${selectedUSSDId === p.id ? '#27500A' : 'rgba(0,0,0,0.1)'}`, background: selectedUSSDId === p.id ? '#EAF3DE' : '#F7F6F2', color: selectedUSSDId === p.id ? '#27500A' : '#444441' }}>
+                          {p.name}
                         </button>
-                      )}
+                      ))}
                     </div>
-                  )}
-
-                  {payMethod === 'ussd' && (
-                    <div className="space-y-4 text-xs overflow-x-auto" id="interswitch-ussd-form">
-                      <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wider">USSD Mobile banking gateway</h4>
-                      <p className="text-[11px] text-gray-500">
-                        Dial this structured mobile USSD offline dialer string to authorize immediate funds from your bank ledger.
-                      </p>
-
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-semibold text-gray-500 block">Select Banking Institution</label>
-                        <div className="grid grid-cols-2 gap-2">
-                          {ussdProviders.map(p => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedUSSDId(p.id);
-                                setUssdStep(1);
-                              }}
-                              className={`py-2 px-3 text-left rounded-lg text-xs truncate border ${selectedUSSDId === p.id ? 'border-emerald-700 bg-emerald-50 text-emerald-850 font-semibold' : 'border-black/5 bg-gray-50 hover:bg-black/5'}`}
-                            >
-                              {p.name}
-                            </button>
-                          ))}
+                    {ussdStep === 1 && (
+                      <div className="rounded-xl p-4 text-center font-mono" style={{ background: '#0f172a', color: '#00ffcc' }}>
+                        <p className="text-sm font-bold break-all">{ussdProviders.find(p => p.id === selectedUSSDId)?.code}{orderTotal}#</p>
+                        <p style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>Dial this on your phone</p>
+                        <button onClick={runUSSDDialTrigger}
+                          className="mt-3 w-full py-2 rounded-lg text-xs font-bold"
+                          style={{ background: '#27500A', color: '#fff' }}>Execute dial</button>
+                      </div>
+                    )}
+                    {ussdStep === 2 && (
+                      <div className="rounded-xl p-4 space-y-3" style={{ background: '#0f172a', color: '#e2e8f0' }}>
+                        <p style={{ fontSize: 11, color: '#00ffcc' }}>Pay ₦{orderTotal.toLocaleString()} to FarmX?</p>
+                        <input type="password" maxLength={4} placeholder="PIN"
+                          className="w-full text-center tracking-widest rounded-lg h-9"
+                          style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', fontSize: 20 }} />
+                        <div className="flex gap-2">
+                          <button onClick={() => setUssdStep(1)} className="flex-1 py-2 rounded-lg text-xs" style={{ background: '#7f1d1d', color: '#fecaca' }}>Cancel</button>
+                          <button onClick={handleUSSDSuccessConfirm} className="flex-1 py-2 rounded-lg text-xs font-bold" style={{ background: '#00ffcc', color: '#0f172a' }}>Approve</button>
                         </div>
                       </div>
+                    )}
+                    {ussdStep === 3 && (
+                      <div className="text-center py-4 rounded-xl flex items-center justify-center gap-2" style={{ background: '#EAF3DE' }}>
+                        <CheckCircle size={14} style={{ color: '#27500A' }} />
+                        <span style={{ fontSize: 12, color: '#27500A', fontWeight: 500 }}>USSD authorized!</span>
+                      </div>
+                    )}
+                  </div>
+                )}
 
-                      {/* USSD screen interactive simulator */}
-                      {ussdStep === 1 && (
-                        <div className="bg-slate-900 text-slate-100 p-4 rounded-xl text-center shadow-inner font-mono relative overflow-hidden text-xs">
-                          <p className="text-emerald-400 font-bold tracking-widest text-[#00ffcc] break-all" style={{ color: '#00ffcc' }}>
-                            {ussdProviders.find(p => p.id === selectedUSSDId)?.code}28116*₦{orderTotal}#
-                          </p>
-                          <p className="text-[10px] text-gray-400 mt-2">FarmX cooperative checkout dial string</p>
-                          <button
-                            type="button"
-                            onClick={runUSSDDialTrigger}
-                            className="mt-4 w-full py-2 bg-emerald-800 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg border border-emerald-950 shadow transition-all cursor-pointer"
-                          >
-                            Execute dial command
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Dial window popup screen */}
-                      {ussdStep === 2 && (
-                        <div className="bg-slate-950 p-4 rounded-xl font-mono text-slate-200 border border-slate-800 text-xs space-y-4">
-                          <div className="p-3 bg-slate-900 border border-slate-800 rounded-lg space-y-2 text-[#00ffcc] text-[10px]" style={{ color: '#00ffcc' }}>
-                            <p className="font-bold">SMART SCREEN SIMULATOR:</p>
-                            <p className="text-white">Pay FarmX ₦{orderTotal.toLocaleString()} for {selectedCityName}, {selectedState} shipping?</p>
-                            <p className="text-slate-400">Enter secure ATM banking PIN:</p>
-                          </div>
-                          
-                          <div className="space-y-2">
-                            <input
-                              type="password"
-                              maxLength={4}
-                              placeholder="****"
-                              className="w-full text-center tracking-[0.5rem] bg-slate-900 text-white border border-slate-700 h-9 font-bold rounded-lg"
-                            />
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => setUssdStep(1)}
-                                className="flex-1 py-2 bg-red-950 text-red-100 border border-red-900 text-[10px] font-bold rounded-lg"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleUSSDSuccessConfirm}
-                                className="flex-1 py-2 bg-[#00ffcc] text-slate-950 text-[10px] font-bold rounded-lg"
-                              >
-                                Approve Debit
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      {ussdStep === 3 && (
-                        <div className="text-center py-5 bg-emerald-100/50 border border-emerald-200 rounded-xl text-emerald-800 font-semibold text-xs flex items-center justify-center gap-2 animate-pulse">
-                          <CheckCircle size={14} className="text-emerald-700" />
-                          <span>USSD request authorized! Approved</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                <div className="flex items-center justify-center gap-2 pt-2">
+                  <ShieldCheck size={12} style={{ color: '#27500A' }} />
+                  <span style={{ fontSize: 10, color: '#5F5E5A' }}>Secured · CBN licensed processor</span>
                 </div>
               </div>
             )}
-
-            {/* Footer with legal shield */}
-            <div className="p-4 bg-slate-50 border-t border-black/5 text-center flex items-center justify-center gap-2">
-              <ShieldCheck size={12} className="text-emerald-700" />
-              <span className="text-[10px] text-gray-400 font-light tracking-wide uppercase">Secured by CBN licensed processor</span>
-            </div>
-
           </div>
         </div>
       )}
@@ -1006,7 +766,6 @@ export function CheckoutScreen({ onNavigate }: Props) {
   );
 }
 
-// Low-volume component dependencies mockup 
 function Lock({ size, className }: { size?: number, className?: string }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width={size || 16} height={size || 16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>

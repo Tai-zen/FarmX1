@@ -21,7 +21,7 @@ const farmerNav = [
   ]},
   { label: 'Commerce', items: [
     { screen: 'my-listings' as Screen, icon: ShoppingBag, label: 'My Listings' },
-    { screen: 'farmer-orders' as Screen, icon: ClipboardList, label: 'Orders', badgeCount: 3 },
+    { screen: 'farmer-orders' as Screen, icon: ClipboardList, label: 'Orders' },
     { screen: 'wallet' as Screen, icon: Wallet, label: 'Wallet' },
   ]},
   { label: 'Account', items: [
@@ -97,11 +97,7 @@ export function Sidebar({ role, activeScreen, onNavigate, cartCount = 0, profile
                         {item.badge}
                       </span>
                     )}
-                    {'badgeCount' in item && item.badgeCount && (!profile || profile.isDemo) ? (
-                      <span className="rounded-full w-4 h-4 flex items-center justify-center" style={{ fontSize: 9, background: '#A32D2D', color: '#fff' }}>
-                        {item.badgeCount}
-                      </span>
-                    ) : null}
+                    {/* ── FIX: only show cart count badge when count > 0 ── */}
                     {item.screen === 'cart' && cartCount > 0 && (
                       <span className="rounded-full w-4 h-4 flex items-center justify-center" style={{ fontSize: 9, background: '#185FA5', color: '#fff' }}>
                         {cartCount}

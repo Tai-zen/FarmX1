@@ -2,31 +2,32 @@ import React, { useState, useEffect } from 'react';
 import { ChevronRight, ShoppingBag, Star, TrendingDown, Package, Heart, MapPin } from 'lucide-react';
 import { Screen } from './types';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { getRegisteredFarmers } from '../firebase';
+import { getRegisteredFarmers, subscribeToConsumerOrders, auth } from '../firebase';
 
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
-const recentOrders = [
+// Demo-only static data
+const demoRecentOrders = [
   { id: 'ORD-0221', product: 'Roma Tomatoes × 5kg', farmer: 'Aminu Danjuma', location: 'Kaduna', amount: 3500, status: 'in_transit', date: '3 Jun', emoji: '🍅', eta: 'Today' },
   { id: 'ORD-0220', product: 'Maize (Dried) × 10kg', farmer: 'Blessing Okafor', location: 'Plateau', amount: 3500, status: 'delivered', date: '1 Jun', emoji: '🌽', eta: 'Delivered' },
   { id: 'ORD-0219', product: 'White Onion × 3kg', farmer: 'Musa Ibrahim', location: 'Kano', amount: 1350, status: 'delivered', date: '28 May', emoji: '🧅', eta: 'Delivered' },
   { id: 'ORD-0218', product: 'Fresh Ginger × 1kg', farmer: 'Aminu Danjuma', location: 'Kaduna', amount: 1200, status: 'delivered', date: '26 May', emoji: '🫚', eta: 'Delivered' },
 ];
 
-const savedFarmers = [
+const savedFarmersFallback = [
   { name: 'Aminu Danjuma', farm: 'Danjuma Farm', location: 'Kaduna', rating: 4.9, orders: 12, initials: 'AD', color: '#27500A' },
   { name: 'Blessing Okafor', farm: 'Blessing Farms', location: 'Plateau', rating: 4.7, orders: 5, initials: 'BO', color: '#3B6D11' },
   { name: 'Musa Ibrahim', farm: 'Ibrahim Fresh', location: 'Kano', rating: 4.8, orders: 3, initials: 'MI', color: '#185FA5' },
 ];
 
-const spendData = [
+const demoSpendData = [
   { name: 'Vegetables', value: 12800, color: '#3B6D11' },
   { name: 'Grains', value: 7000, color: '#639922' },
   { name: 'Fruits', value: 3200, color: '#185FA5' },
   { name: 'Spices', value: 2400, color: '#854F0B' },
 ];
 
-const weeklySpend = [
+const demoWeeklySpend = [
   { week: 'W1 May', amount: 4200 },
   { week: 'W2 May', amount: 6800 },
   { week: 'W3 May', amount: 3500 },
@@ -42,25 +43,41 @@ const recommendations = [
 ];
 
 const statusStyle = (s: string) => {
-  if (s === 'in_transit') return { bg: '#E6F1FB', color: '#185FA5', label: 'In transit' };
+  if (s === 'in_transit' || s === 'dispatched') return { bg: '#E6F1FB', color: '#185FA5', label: 'In transit' };
   if (s === 'delivered') return { bg: '#EAF3DE', color: '#27500A', label: 'Delivered' };
-  if (s === 'placed') return { bg: '#FAEEDA', color: '#854F0B', label: 'Processing' };
+  if (s === 'placed' || s === 'new') return { bg: '#FAEEDA', color: '#854F0B', label: 'Processing' };
   return { bg: '#F1EFE8', color: '#5F5E5A', label: s };
 };
-
-const totalSpend = spendData.reduce((a, b) => a + b.value, 0);
 
 export function ConsumerDashboard({ onNavigate, profile }: Props) {
   const [likedRec, setLikedRec] = useState<Set<string>>(new Set());
   const [dynamicFarmers, setDynamicFarmers] = useState<any[]>([]);
 
-  const isNewUser = profile && !profile.isDemo;
+  // ── FIX: subscribe to real consumer orders ──────────────────────────────────
+  const [realOrders, setRealOrders] = useState<any[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+
+  const isDemo = profile?.isDemo === true;
+
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || isDemo) {
+      setOrdersLoading(false);
+      return;
+    }
+    const unsub = subscribeToConsumerOrders(uid, (orders) => {
+      setRealOrders(orders);
+      setOrdersLoading(false);
+    });
+    return () => unsub();
+  }, [isDemo]);
+  // ───────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
     async function loadFarmers() {
       const dbFarmers = await getRegisteredFarmers();
       if (dbFarmers && dbFarmers.length > 0) {
-        const mapped = dbFarmers.map((df, idx) => ({
+        const mapped = dbFarmers.map((df: any, idx: number) => ({
           name: df.fullName || 'Anonymous Farmer',
           farm: df.farmName || 'Premier Fields',
           location: df.farmState || 'Nigeria',
@@ -84,34 +101,58 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
   const displayName = profile ? profile.fullName.split(' ')[0] : 'Chioma';
   const displayLocation = profile ? (profile.deliveryAddress?.split(',').slice(-2).join(',') || 'Lagos') : 'Lagos Island';
 
-  const spentValue = isNewUser ? '₦0' : `₦${totalSpend.toLocaleString()}`;
-  const spentSub = isNewUser ? 'No spend recorded' : '↑ +12% vs May';
+  // ── FIX: derive all metrics from real orders for non-demo users ─────────────
+  const listOrders: any[] = isDemo
+    ? demoRecentOrders
+    : realOrders.slice(0, 4).map(o => ({
+        id: o.id,
+        product: o.product || 'Product',
+        farmer: o.buyerName || 'Farmer',
+        location: o.buyerLocation?.split(',').slice(-1)[0]?.trim() || 'Nigeria',
+        amount: o.amount || 0,
+        status: o.status || 'new',
+        date: o.createdAt?.toDate ? new Date(o.createdAt.toDate()).toLocaleDateString('en-NG', { day: 'numeric', month: 'short' }) : 'Recently',
+        emoji: '🌾',
+        eta: o.status === 'delivered' ? 'Delivered' : 'Pending',
+      }));
 
-  const monthOrdersValue = isNewUser ? '0' : '8';
-  const monthOrdersSub = isNewUser ? '0 in transit · 0 delivered' : '1 in transit · 7 delivered';
+  const totalSpent = isDemo
+    ? demoSpendData.reduce((a, b) => a + b.value, 0)
+    : realOrders.reduce((sum, o) => sum + (o.amount || 0), 0);
 
-  const totalOrdersValue = isNewUser ? '0' : '34';
-  const totalOrdersSub = isNewUser ? 'Ready for your first order' : '98% delivery success';
+  const monthOrders = isDemo ? 8 : realOrders.length;
+  const inTransitCount = isDemo ? 1 : realOrders.filter(o => o.status === 'dispatched' || o.status === 'new').length;
+  const deliveredCount = isDemo ? 7 : realOrders.filter(o => o.status === 'delivered').length;
 
-  // Dynamic farmers represent both dynamic entries and premium verification fallbacks
-  const listFarmers = [...dynamicFarmers, ...savedFarmers];
+  const spentValue = isDemo ? `₦${demoSpendData.reduce((a,b)=>a+b.value,0).toLocaleString()}` : `₦${totalSpent.toLocaleString()}`;
+  const spentSub = isDemo ? '↑ +12% vs May' : (realOrders.length > 0 ? `${realOrders.length} total orders` : 'No spend recorded');
 
+  const monthOrdersValue = String(monthOrders);
+  const monthOrdersSub = `${inTransitCount} in transit · ${deliveredCount} delivered`;
+
+  const totalOrdersValue = isDemo ? '34' : String(realOrders.length);
+  const totalOrdersSub = isDemo ? '98% delivery success' : (realOrders.length > 0 ? 'Order history' : 'Ready for your first order');
+
+  // Spend breakdown: for real users, show flat breakdown based on total
+  const activeSpendData = isDemo
+    ? demoSpendData
+    : demoSpendData.map(d => ({ ...d, value: 0 }));
+
+  const activeWeeklyData = isDemo ? demoWeeklySpend : demoWeeklySpend.map(d => ({ ...d, amount: 0 }));
+  const displayTotalSpend = isDemo ? demoSpendData.reduce((a,b)=>a+b.value,0) : totalSpent;
+
+  const showTransitBanner = !isDemo && inTransitCount > 0;
+  const listFarmers = [...dynamicFarmers, ...(isDemo ? savedFarmersFallback : [])];
   const savedFarmersValue = String(listFarmers.length);
   const savedFarmersSub = listFarmers.length > 0 ? 'Direct farm connections' : 'Build farm connections';
-
-  const showTransitBanner = !isNewUser;
-
-  const listOrders = isNewUser ? [] : recentOrders;
-  const activeSpendData = isNewUser ? spendData.map(d => ({ ...d, value: 0 })) : spendData;
-  const activeWeeklyData = isNewUser ? weeklySpend.map(d => ({ ...d, amount: 0 })) : weeklySpend;
-  const displayTotalSpend = isNewUser ? 0 : totalSpend;
+  // ───────────────────────────────────────────────────────────────────────────
 
   return (
     <div className="p-5 lg:p-6 max-w-5xl mx-auto">
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 500, color: '#0C447C' }}>Good morning, {displayName} 👋</h1>
-          <p style={{ fontSize: 13, color: '#5F5E5A' }}>Thursday, 5 June 2026 · {displayLocation}</p>
+          <p style={{ fontSize: 13, color: '#5F5E5A' }}>{new Date().toLocaleDateString('en-NG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · {displayLocation}</p>
         </div>
         <button onClick={() => onNavigate('marketplace')}
           className="px-4 py-2 rounded-lg transition-all active:scale-[0.98]"
@@ -139,18 +180,22 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
         ))}
       </div>
 
-      {/* In transit banner */}
+      {/* In-transit banner (real users with active orders) */}
       {showTransitBanner && (
-        <div className="rounded-xl p-4 mb-5 flex items-center gap-3 cursor-pointer" style={{ background: '#E6F1FB', border: '1px solid #185FA5' }}
-          onClick={() => onNavigate('order-tracking')}>
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: '#185FA5' }}>
-            <Package size={18} className="text-white" />
+        <div className="rounded-xl p-4 mb-5 flex items-center justify-between"
+          style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.25)' }}>
+          <div className="flex items-center gap-3">
+            <Package size={20} style={{ color: '#185FA5' }} />
+            <div>
+              <p style={{ fontSize: 13, fontWeight: 500, color: '#0C447C' }}>{inTransitCount} order{inTransitCount !== 1 ? 's' : ''} on the way</p>
+              <p style={{ fontSize: 11, color: '#185FA5' }}>Track real-time status of your deliveries</p>
+            </div>
           </div>
-          <div className="flex-1">
-            <p style={{ fontSize: 13, fontWeight: 500, color: '#0C447C' }}>ORD-0221 is on its way!</p>
-            <p style={{ fontSize: 11, color: '#185FA5' }}>Roma Tomatoes × 5kg — estimated delivery today</p>
-          </div>
-          <ChevronRight size={16} style={{ color: '#185FA5' }} />
+          <button onClick={() => onNavigate('order-tracking')}
+            style={{ fontSize: 12, color: '#185FA5', fontWeight: 500 }}
+            className="flex items-center gap-0.5">
+            Track <ChevronRight size={13} />
+          </button>
         </div>
       )}
 
@@ -158,7 +203,7 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
         {/* Spend donut */}
         <div className="rounded-xl p-4" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
           <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441', marginBottom: 2 }}>Spend by category</h2>
-          <p style={{ fontSize: 11, color: '#5F5E5A', marginBottom: 4 }}>June 2026 · ₦{displayTotalSpend.toLocaleString()} total</p>
+          <p style={{ fontSize: 11, color: '#5F5E5A', marginBottom: 4 }}>All time · ₦{displayTotalSpend.toLocaleString()} total</p>
           <ResponsiveContainer width="100%" height={130}>
             <PieChart>
               <Pie data={activeSpendData} cx="50%" cy="50%" innerRadius={38} outerRadius={55} dataKey="value" strokeWidth={0}>
@@ -167,20 +212,24 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
               <Tooltip formatter={(v: number) => [`₦${v.toLocaleString()}`, '']} contentStyle={{ fontSize: 11, borderRadius: 8, border: '0.5px solid rgba(0,0,0,0.12)' }} />
             </PieChart>
           </ResponsiveContainer>
-          <div className="space-y-2">
-            {activeSpendData.map(d => (
-              <div key={d.name} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full" style={{ background: d.color }} aria-hidden="true" />
-                  <span style={{ fontSize: 11, color: '#5F5E5A' }}>{d.name}</span>
+          {displayTotalSpend === 0 ? (
+            <p style={{ fontSize: 11, color: '#5F5E5A', textAlign: 'center', marginTop: 8 }}>No spending data yet</p>
+          ) : (
+            <div className="space-y-2">
+              {activeSpendData.map(d => (
+                <div key={d.name} className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full" style={{ background: d.color }} aria-hidden="true" />
+                    <span style={{ fontSize: 11, color: '#5F5E5A' }}>{d.name}</span>
+                  </div>
+                  <div className="text-right">
+                    <span style={{ fontSize: 11, color: '#444441', fontWeight: 500 }}>₦{d.value.toLocaleString()}</span>
+                    <span style={{ fontSize: 10, color: '#5F5E5A' }}> · {displayTotalSpend > 0 ? Math.round(d.value / displayTotalSpend * 100) : 0}%</span>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span style={{ fontSize: 11, color: '#444441', fontWeight: 500 }}>₦{d.value.toLocaleString()}</span>
-                  <span style={{ fontSize: 10, color: '#5F5E5A' }}> · {displayTotalSpend > 0 ? Math.round(d.value / displayTotalSpend * 100) : 0}%</span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Weekly spend trend */}
@@ -210,8 +259,12 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
             </button>
           </div>
           <div className="space-y-2.5">
-            {listOrders.length === 0 ? (
-              <div className="py-8 text-center text-xs text-gray-400">No purchase history yet. Orders completed at checkout will show up here!</div>
+            {ordersLoading ? (
+              <div className="py-8 text-center text-xs text-gray-400">Loading orders…</div>
+            ) : listOrders.length === 0 ? (
+              <div className="py-8 text-center text-xs text-gray-400">
+                No purchase history yet. Orders completed at checkout will show up here!
+              </div>
             ) : (
               listOrders.map(o => {
                 const s = statusStyle(o.status);

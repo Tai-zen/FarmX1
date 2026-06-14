@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { MapPin, CheckCircle, Clock } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { MapPin, CheckCircle, Clock, RefreshCw } from 'lucide-react';
 import { Screen } from './types';
+import { auth, subscribeToConsumerOrders, subscribeToFarmerOrders, updateOrderStatus } from '../firebase';
 
 interface Props {
   role: 'farmer' | 'consumer';
@@ -9,25 +10,66 @@ interface Props {
 }
 
 const steps = [
-  { key: 'placed', label: 'Order placed', desc: 'Your order has been confirmed', date: '3 Jun, 10:22 AM' },
-  { key: 'packed', label: 'Packed', desc: 'Farmer has prepared your items', date: '4 Jun, 8:15 AM' },
-  { key: 'in_transit', label: 'In transit', desc: 'Driver: Musa Abdullahi · +234 801 234 5678', date: '5 Jun, 9:00 AM' },
-  { key: 'delivered', label: 'Delivered', desc: 'Confirm delivery to release payment to farmer', date: '—' },
+  { key: 'placed',     label: 'Order placed',  desc: 'Your order has been confirmed' },
+  { key: 'packed',     label: 'Packed',         desc: 'Farmer has prepared your items' },
+  { key: 'in_transit', label: 'In transit',     desc: 'Your order is on its way' },
+  { key: 'delivered',  label: 'Delivered',      desc: 'Confirm delivery to release payment to farmer' },
 ];
 
-const activeStep = 2; // In transit
-
-const orders = [
-  { id: 'ORD-0221', product: 'Roma Tomatoes × 5kg', farmer: 'Aminu Danjuma', amount: 3500, step: 2 },
-  { id: 'ORD-0220', product: 'Maize (Dried) × 10kg', farmer: 'Blessing Okafor', amount: 3500, step: 3 },
-  { id: 'ORD-0219', product: 'White Onion × 3kg', farmer: 'Musa Ibrahim', amount: 1350, step: 3 },
-];
+function statusToStep(status: string): number {
+  switch (status) {
+    case 'new':        return 0;
+    case 'packed':     return 1;
+    case 'dispatched': return 2;
+    case 'delivered':  return 3;
+    default:           return 0;
+  }
+}
 
 export function OrderTracking({ role, onNavigate, profile }: Props) {
-  const isNewUser = profile && !profile.isDemo;
-  const displayOrders = isNewUser ? [] : orders;
+  const [orders, setOrders] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
-  if (!displayOrders || displayOrders.length === 0) {
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
+
+    const subscribe = role === 'farmer' ? subscribeToFarmerOrders : subscribeToConsumerOrders;
+    const unsub = subscribe(uid, (liveOrders) => {
+      setOrders(liveOrders);
+      setSelected(prev => {
+        // Keep existing selection if it's still valid, otherwise pick the first order
+        if (prev && liveOrders.some(o => o.id === prev)) return prev;
+        return liveOrders[0]?.id || null;
+      });
+      setLoading(false);
+    });
+
+    return () => unsub();
+  }, [role]);
+
+  const handleConfirmDelivery = async () => {
+    if (!selected) return;
+    setConfirming(true);
+    await updateOrderStatus(selected, 'delivered');
+    setConfirming(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="p-6 max-w-2xl mx-auto text-center py-20">
+        <RefreshCw size={28} className="animate-spin mx-auto mb-4" style={{ color: '#185FA5' }} />
+        <p style={{ fontSize: 13, color: '#5F5E5A' }}>Loading orders…</p>
+      </div>
+    );
+  }
+
+  if (orders.length === 0) {
     return (
       <div className="p-6 max-w-2xl mx-auto text-center py-20">
         <div className="w-16 h-16 rounded-full bg-[#E6F1FB] text-[#0C447C] flex items-center justify-center mx-auto mb-5 text-2xl">
@@ -35,7 +77,9 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
         </div>
         <h1 style={{ fontSize: 22, fontWeight: 500, color: '#0C447C', marginBottom: 8 }}>No orders yet</h1>
         <p style={{ fontSize: 13, color: '#5F5E5A', marginBottom: 24, lineHeight: 1.6 }} className="max-w-md mx-auto">
-          {role === 'farmer' ? "You don't have any farm orders yet. List your products to start selling!" : "You haven't placed any orders yet. Browse the marketplace to find fresh farm produce!"}
+          {role === 'farmer'
+            ? "You don't have any farm orders yet. List your products to start selling!"
+            : "You haven't placed any orders yet. Browse the marketplace to find fresh farm produce!"}
         </p>
         <button
           onClick={() => onNavigate(role === 'farmer' ? 'add-listing' : 'marketplace')}
@@ -48,9 +92,8 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
     );
   }
 
-  const [selected, setSelected] = useState(displayOrders[0]?.id);
-  const [confirmed, setConfirmed] = useState(false);
-  const order = displayOrders.find(o => o.id === selected) || displayOrders[0];
+  const order = orders.find(o => o.id === selected) || orders[0];
+  const orderStep = statusToStep(order?.status || 'new');
 
   return (
     <div className="p-5 lg:p-6 max-w-4xl mx-auto">
@@ -63,8 +106,9 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
         {/* Order list */}
         <div className="space-y-2">
           <p style={{ fontSize: 12, fontWeight: 500, color: '#5F5E5A', marginBottom: 8 }}>Your orders</p>
-          {displayOrders.map(o => {
-            const stepData = steps[o.step];
+          {orders.map(o => {
+            const step = statusToStep(o.status || 'new');
+            const stepData = steps[step];
             return (
               <button
                 key={o.id}
@@ -75,13 +119,13 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
                   background: selected === o.id ? '#E6F1FB' : '#fff'
                 }}
               >
-                <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{o.id}</p>
-                <p style={{ fontSize: 11, color: '#5F5E5A' }}>{o.product}</p>
+                <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>#{o.id.slice(0, 8).toUpperCase()}</p>
+                <p style={{ fontSize: 11, color: '#5F5E5A' }} className="truncate">{o.product}</p>
                 <span className="rounded-full px-2 py-0.5 mt-1 inline-block"
                   style={{
                     fontSize: 9,
-                    background: o.step === 3 ? '#EAF3DE' : o.step === 2 ? '#E6F1FB' : '#FAEEDA',
-                    color: o.step === 3 ? '#27500A' : o.step === 2 ? '#185FA5' : '#854F0B',
+                    background: step === 3 ? '#EAF3DE' : step === 2 ? '#E6F1FB' : '#FAEEDA',
+                    color: step === 3 ? '#27500A' : step === 2 ? '#185FA5' : '#854F0B',
                   }}>
                   {stepData.label}
                 </span>
@@ -93,24 +137,28 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
         {/* Timeline */}
         <div className="lg:col-span-2">
           <div className="rounded-xl p-5" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
-            <div className="flex items-start justify-between mb-5">
-              <div>
-                <p style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>{selected}</p>
-                <p style={{ fontSize: 12, color: '#5F5E5A' }}>{order.product} · ₦{order.amount.toLocaleString()}</p>
+            <div className="flex items-start justify-between mb-5 gap-3">
+              <div className="min-w-0">
+                <p style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>#{order.id.slice(0, 8).toUpperCase()}</p>
+                <p style={{ fontSize: 12, color: '#5F5E5A' }} className="truncate">{order.product} · ₦{Number(order.amount).toLocaleString()}</p>
+                {order.buyerName && (
+                  <p style={{ fontSize: 11, color: '#5F5E5A' }}>Buyer: {order.buyerName}</p>
+                )}
               </div>
-              <div className="rounded-xl px-3 py-1" style={{ background: '#E6F1FB' }}>
-                <p style={{ fontSize: 11, color: '#0C447C' }}>Est. delivery: 8 Jun 2026</p>
+              <div className="rounded-xl px-3 py-1 flex-shrink-0" style={{ background: '#E6F1FB' }}>
+                <p style={{ fontSize: 11, color: '#0C447C' }}>
+                  {order.status === 'delivered' ? 'Delivered' : 'In progress'}
+                </p>
               </div>
             </div>
 
             {/* Stepper */}
             <div className="space-y-0">
               {steps.map((step, i) => {
-                const isDone = i < order.step;
-                const isActive = i === order.step;
+                const isDone = i < orderStep;
+                const isActive = i === orderStep;
                 return (
                   <div key={step.key} className="flex gap-4">
-                    {/* Icon + line */}
                     <div className="flex flex-col items-center">
                       <div className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
                         style={{
@@ -129,40 +177,51 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
                         <div className="w-0.5 flex-1 my-1" style={{ background: isDone ? '#27500A' : '#EAF3DE', minHeight: 24 }} />
                       )}
                     </div>
-                    {/* Content */}
                     <div className="pb-5 flex-1">
                       <p style={{ fontSize: 13, fontWeight: isActive ? 500 : 400, color: isDone || isActive ? '#444441' : '#5F5E5A' }}>
                         {step.label}
                       </p>
                       <p style={{ fontSize: 11, color: '#5F5E5A', marginTop: 1 }}>{step.desc}</p>
-                      {step.date !== '—' && (
-                        <p style={{ fontSize: 10, color: '#5F5E5A', marginTop: 1 }}>{step.date}</p>
-                      )}
                     </div>
                   </div>
                 );
               })}
             </div>
 
-            {/* Map pin */}
-            <div className="rounded-xl p-4 mt-2" style={{ background: '#F7F6F2', border: '0.5px solid rgba(0,0,0,0.1)' }}>
-              <div className="flex items-center gap-2">
-                <MapPin size={14} style={{ color: '#185FA5' }} aria-hidden="true" />
-                <p style={{ fontSize: 12, color: '#444441' }}>Currently near: Toll Gate, Lagos–Ibadan Expressway</p>
+            {/* Delivery address */}
+            {order.buyerLocation && (
+              <div className="rounded-xl p-4 mt-2" style={{ background: '#F7F6F2', border: '0.5px solid rgba(0,0,0,0.1)' }}>
+                <div className="flex items-center gap-2">
+                  <MapPin size={14} style={{ color: '#185FA5' }} aria-hidden="true" />
+                  <p style={{ fontSize: 12, color: '#444441' }}>Delivery to: {order.buyerLocation}</p>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Confirm delivery (consumer) */}
-            {role === 'consumer' && order.step === 2 && !confirmed && (
+            {/* Farmer: mark dispatched */}
+            {role === 'farmer' && order.status === 'new' && (
               <button
-                onClick={() => setConfirmed(true)}
+                onClick={() => updateOrderStatus(order.id, 'dispatched')}
                 className="w-full mt-4 rounded-lg py-2.5 transition-all active:scale-[0.98]"
-                style={{ background: '#27500A', color: '#fff', fontSize: 13, fontWeight: 500 }}
+                style={{ background: '#185FA5', color: '#fff', fontSize: 13, fontWeight: 500 }}
               >
-                Confirm delivery received
+                Mark as dispatched
               </button>
             )}
-            {confirmed && (
+
+            {/* Consumer: confirm delivery */}
+            {role === 'consumer' && order.status === 'dispatched' && (
+              <button
+                onClick={handleConfirmDelivery}
+                disabled={confirming}
+                className="w-full mt-4 rounded-lg py-2.5 transition-all active:scale-[0.98] disabled:opacity-60"
+                style={{ background: '#27500A', color: '#fff', fontSize: 13, fontWeight: 500 }}
+              >
+                {confirming ? 'Confirming…' : 'Confirm delivery received'}
+              </button>
+            )}
+
+            {order.status === 'delivered' && (
               <div className="mt-4 rounded-xl p-3 flex items-center gap-2" style={{ background: '#EAF3DE' }}>
                 <CheckCircle size={14} style={{ color: '#27500A' }} />
                 <p style={{ fontSize: 12, color: '#27500A' }}>Delivery confirmed. Payment released to farmer.</p>
