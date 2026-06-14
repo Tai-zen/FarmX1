@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Truck, Phone, MessageCircle, Search, ChevronDown, ChevronUp } from 'lucide-react';
+import { subscribeToFarmerOrders, auth } from '../firebase';
 
 const demoOrders = [
   { id: 'ORD-8821', buyer: 'Fatima Bello', location: 'Abuja FCT', phone: '+234 802 345 6789', product: 'Roma Tomatoes × 20kg', amount: 14000, status: 'new', time: '2h ago', avatar: 'FB', color: '#185FA5', items: 1 },
@@ -28,20 +29,18 @@ export function FarmerOrders({ profile }: { profile?: any }) {
   const [search, setSearch] = useState('');
   const [allOrders, setAllOrders] = useState<typeof demoOrders>([]);
 
-  const isNewUser = profile && !profile.isDemo;
+  const isNewUser = !profile || !profile.isDemo;   // ← FIXED
 
   useEffect(() => {
-    if (isNewUser) {
-      // Load real orders from localStorage
-      const userOrdersKey = `farmer_orders_${profile.uid}`;
-      const stored = localStorage.getItem(userOrdersKey);
-      if (stored) {
-        setAllOrders(JSON.parse(stored));
-      } else {
-        setAllOrders([]);
-      }
+    const uid = auth.currentUser?.uid;
+    if (uid && isNewUser) {
+      // Real user — subscribe to Firestore orders
+      const unsub = subscribeToFarmerOrders(uid, (liveOrders) => {
+        setAllOrders(liveOrders);
+      });
+      return () => unsub();
     } else {
-      // Show demo orders
+      // Guest / demo — show demo data
       setAllOrders(demoOrders);
     }
   }, [profile, isNewUser]);

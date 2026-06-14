@@ -2,120 +2,114 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // 1. Global Safety Net (Rule 1 of Fortress Rules)
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // 3. Reusable Global Primitive Helpers
+    // Helpers
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function isAdmin() {
+      return isSignedIn() &&
+        get(/databases/$(database)/documents/user_profiles/$(request.auth.uid)).data.role == 'admin';
     }
 
-    // 2. Validation Blueprints (Rule 2 of Fortress Rules)
-    function isValidUserProfile(data) {
-      return data.uid is string 
-        && data.uid.size() <= 128
-        && data.uid == request.auth.uid
-        && data.fullName is string
-        && data.fullName.size() >= 2
-        && data.fullName.size() <= 100
-        && data.email is string
-        && data.email.size() <= 128
-        && data.role is string
-        && (data.role == 'farmer' || data.role == 'consumer');
-    }
-
-    function isValidUserAction(data) {
-      return data.id is string
-        && data.id.size() <= 128
-        && data.uid is string
-        && data.uid == request.auth.uid
-        && data.actionType is string
-        && data.actionType.size() <= 100
-        && data.description is string
-        && data.description.size() <= 500;
-    }
-
-    // 4. Matches for Collections (Rule 11/12 of Fortress Rules)
+    // User Profiles
     match /user_profiles/{uid} {
-      allow get: if isSignedIn();
-      allow list: if isSignedIn() && isOwner(uid);
-      allow create: if isSignedIn() && isOwner(uid) && isValidUserProfile(request.resource.data) 
-                    && request.resource.data.createdAt == request.time;
-      allow update: if isSignedIn() && isOwner(uid) && isValidUserProfile(request.resource.data)
-                    && request.resource.data.createdAt == resource.data.createdAt;
-      allow delete: if false; // Profiles are permanent records
+      allow read: if isSignedIn();
+
+      allow create: if isOwner(uid)
+        && request.resource.data.role in ['farmer', 'consumer'];
+
+      allow update: if isOwner(uid)
+        && request.resource.data.role in ['farmer', 'consumer'];
+
+      allow delete: if false;
+
+      allow read, write: if isAdmin();
     }
 
+    // Products
+    match /products/{productId} {
+      allow read: if true;
+
+      allow create: if isSignedIn()
+        && request.resource.data.farmerUid == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && (
+          resource.data.farmerUid == request.auth.uid ||
+          isAdmin()
+        );
+
+      allow delete: if isSignedIn()
+        && (
+          resource.data.farmerUid == request.auth.uid ||
+          isAdmin()
+        );
+    }
+
+    // Orders
+    match /orders/{orderId} {
+      allow create: if isSignedIn()
+        && request.resource.data.buyerUid == request.auth.uid;
+
+      allow read: if isSignedIn()
+        && (
+          resource.data.buyerUid == request.auth.uid ||
+          resource.data.farmerUid == request.auth.uid ||
+          isAdmin()
+        );
+
+      allow update: if isSignedIn()
+        && (
+          (resource.data.farmerUid == request.auth.uid
+            && request.resource.data.status == 'dispatched') ||
+
+          (resource.data.buyerUid == request.auth.uid
+            && request.resource.data.status == 'delivered') ||
+
+          isAdmin()
+        );
+
+      allow delete: if false;
+    }
+
+    // Cart
+    match /carts/{cartItemId} {
+      allow read, write: if isSignedIn()
+        && (
+          resource == null
+            ? request.resource.data.userId == request.auth.uid
+            : resource.data.userId == request.auth.uid
+        );
+    }
+
+    // Planting Calendars
+    match /planting_calendars/{scheduleId} {
+      allow read, write: if isSignedIn()
+        && (
+          resource == null
+            ? request.resource.data.uid == request.auth.uid
+            : resource.data.uid == request.auth.uid
+        );
+    }
+
+    // User Actions (Audit Log)
     match /user_actions/{actionId} {
-      allow get: if isSignedIn() && resource.data.uid == request.auth.uid;
-      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
-      allow create: if isSignedIn() && isOwner(request.resource.data.uid) && isValidUserAction(request.resource.data)
-                    && request.resource.data.timestamp == request.time;
-      allow update, delete: if false; // Action logs are append-only immutable audit trials
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
+
+      allow read: if isAdmin();
+
+      allow update, delete: if false;
     }
 
-    function isValidProduct(data) {
-  return data.farmerUid == request.auth.uid
-    && data.name is string && data.name.size() > 0
-    && data.price is number && data.price >= 0
-    && data.unit is string
-    && data.category is string
-    && data.status in ['in_stock','low_stock','out_of_stock','archived'];
-}
-
-match /products/{productId} {
-  allow get, list: if true; // public marketplace read
-  allow create: if isSignedIn() && isValidProduct(request.resource.data);
-  allow update, delete: if isSignedIn() && resource.data.farmerUid == request.auth.uid;
-}
-
-function isValidOrder(data) {
-  return data.buyerUid == request.auth.uid
-    && data.farmerUid is string
-    && data.amount is number && data.amount > 0
-    && data.status in ['new','dispatched','delivered'];
-}
-
-match /orders/{orderId} {
-  allow get: if isSignedIn() && (resource.data.buyerUid == request.auth.uid || resource.data.farmerUid == request.auth.uid);
-  allow list: if isSignedIn();
-  allow create: if isSignedIn() && isValidOrder(request.resource.data);
-  allow update: if isSignedIn() && (resource.data.buyerUid == request.auth.uid || resource.data.farmerUid == request.auth.uid);
-  allow delete: if false;
-}
-
-match /planting_calendars/{scheduleId} {
-  allow get, list: if isSignedIn() && resource.data.uid == request.auth.uid;
-  allow create: if isSignedIn() && request.resource.data.uid == request.auth.uid;
-  allow update, delete: if isSignedIn() && resource.data.uid == request.auth.uid;
-}
-
-function isValidCartItem(data) {
-  return data.userId == request.auth.uid
-    && data.productId is string
-    && data.name is string
-    && data.price is number && data.price >= 0
-    && data.unit is string
-    && data.qty is number && data.qty > 0;
-}
-
-match /carts/{cartItemId} {
-  allow get, list: if isSignedIn() && resource.data.userId == request.auth.uid;
-  allow create: if isSignedIn() && isValidCartItem(request.resource.data);
-  allow update: if isSignedIn() && resource.data.userId == request.auth.uid
-                && request.resource.data.userId == resource.data.userId;
-  allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
-}
-
+    // Admin-only collections
+    match /admin/{document=**} {
+      allow read, write: if isAdmin();
+    }
   }
 }

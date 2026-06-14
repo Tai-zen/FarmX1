@@ -192,6 +192,7 @@ export async function getFarmerOrders(farmerUid: string) {
 /**
  * Creates a new order document in Firestore (called at checkout).
  */
+// FIND the entire createOrder function and REPLACE WITH:
 export async function createOrder(orderData: {
   farmerUid: string;
   buyerUid: string;
@@ -202,6 +203,13 @@ export async function createOrder(orderData: {
   amount: number;
   items?: number;
   paymentMethod: 'card' | 'bank' | 'ussd';
+  cartItems?: { 
+    productId: string; 
+    name: string;
+    qty: number;
+    unit: string; 
+    price: number; 
+    farmerName?: string }[];
 }) {
   const path = 'orders';
   try {
@@ -214,6 +222,31 @@ export async function createOrder(orderData: {
       createdAt: serverTimestamp(),
     };
     await setDoc(docRef, record);
+
+    // ── Update sold count and available qty on each purchased product ──
+    if (orderData.cartItems && orderData.cartItems.length > 0) {
+      const batch = writeBatch(db);
+      for (const item of orderData.cartItems) {
+        if (!item.productId) continue;
+        const productRef = doc(db, 'products', item.productId);
+        const productSnap = await getDoc(productRef);
+        if (productSnap.exists()) {
+          const data = productSnap.data();
+          const currentQty = Number(data.qty) || 0;
+          const currentSold = Number(data.sold) || 0;
+          const newQty = Math.max(0, currentQty - item.qty);
+          const newSold = currentSold + item.qty;
+          batch.update(productRef, {
+            qty: newQty,
+            sold: newSold,
+            status: newQty === 0 ? 'out_of_stock' : newQty < 10 ? 'low_stock' : 'in_stock',
+          });
+        }
+      }
+      await batch.commit();
+    }
+    // ──────────────────────────────────────────────────────────────────
+
     return docRef.id;
   } catch (error) {
     console.warn('Creating order failed/unconfigured:', error);
@@ -369,6 +402,7 @@ export interface CartItemDoc {
   userId: string;
   productId: string;
   name: string;
+  farmerUid?: string;      
   farmerName?: string;
   price: number;
   unit: string;
@@ -404,6 +438,7 @@ export async function addToCart(
   product: {
     id: string;
     name: string;
+    farmerUid?: string;      // ← ADD THIS
     farmerName?: string;
     price: number;
     unit: string;
@@ -431,6 +466,7 @@ export async function addToCart(
       userId: uid,
       productId: product.id,
       name: product.name,
+      farmerUid: product.farmerUid || 'unassigned',   // ← ADD THIS LINE
       farmerName: product.farmerName || 'FarmX Farmer',
       price: product.price,
       unit: product.unit,
@@ -476,3 +512,11 @@ export async function clearCart(uid: string) {
     console.warn('Clearing cart failed/unconfigured:', error);
   }
 }
+
+export async function getProductById(productId: string): Promise<any | null> {
+  const ref = doc(db, 'products', productId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return { id: snap.id, ...snap.data() };
+}
+// ─────────────────────────────────────────────────────────────────────────────

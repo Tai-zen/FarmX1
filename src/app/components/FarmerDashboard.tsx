@@ -5,7 +5,8 @@ import {
 } from 'lucide-react';
 import { Screen } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
-import { subscribeToPlantingSchedules } from '../firebase';
+import { subscribeToPlantingSchedules, subscribeToFarmerOrders, auth } from '../firebase';
+
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
 const salesData = [
@@ -70,29 +71,74 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
   const [showNotifs, setShowNotifs] = useState(false);
   const [chartMode, setChartMode] = useState<'revenue' | 'orders'>('revenue');
 
-  const isNewUser = profile && !profile.isDemo;
+  const isNewUser = !profile || !profile.isDemo;
 
   const displayName = profile ? profile.fullName.split(' ')[0] : 'Aminu';
-  const displayLocation = profile ? `${profile.farmName || 'My Farm'} · ${profile.farmState || 'Nigeria'}` : 'Kawo, Kaduna State';
+  const displayLocation = profile
+    ? `${profile.farmName || 'My Farm'} · ${profile.farmState || 'Nigeria'}`
+    : 'Kawo, Kaduna State';
 
-  const walletValue = isNewUser ? '₦0' : '₦287,400';
-  const walletSub = isNewUser ? '₦0 pending release' : '+ ₦48,500 pending release';
-  
-  const activeOrdersValue = isNewUser ? '0' : '7';
-  const activeOrdersSub = isNewUser ? '0 awaiting dispatch' : '3 awaiting dispatch';
+  // ── Live orders — must be declared BEFORE the stat strings below ──────────
+  const [liveOrders, setLiveOrders] = useState<any[]>([]);
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !isNewUser) return;
+    const unsub = subscribeToFarmerOrders(uid, setLiveOrders);
+    return () => unsub();
+  }, [profile, isNewUser]);
 
-  const salesValue = isNewUser ? '₦0' : '₦287,000';
-  const salesSub = isNewUser ? 'No sales this month' : '↑ +24% vs last month';
+  const deliveredOrders = liveOrders.filter(o => o.status === 'delivered');
+  const liveRevenue = deliveredOrders.reduce((sum, o) => sum + (Number(o.amount) || 0), 0);
+  const livePendingRevenue = liveOrders
+    .filter(o => o.status !== 'delivered')
+    .reduce((sum, o) => sum + (Number(o.amount) || 0), 0);
+  const liveActiveOrders = liveOrders.filter(o => o.status !== 'delivered').length;
+  const liveAwaitingDispatch = liveOrders.filter(o => o.status === 'new').length;
+  // ─────────────────────────────────────────────────────────────────────────
 
-  const totalRevenueText = isNewUser ? '₦0' : '₦1,115,000';
-  const totalOrdersText = isNewUser ? '0' : '182';
-  const avgOrderValueText = isNewUser ? '₦0' : '₦6,126';
+  // ── Planting calendar ─────────────────────────────────────────────────────
+  const [schedules, setSchedules] = useState<any[]>([]);
+  useEffect(() => {
+    if (!profile?.uid) return;
+    const unsub = subscribeToPlantingSchedules(profile.uid, setSchedules);
+    return () => unsub();
+  }, [profile]);
 
-  const activeSalesData = isNewUser ? salesData.map(d => ({ ...d, revenue: 0, orders: 0 })) : salesData;
-  const listOrders = isNewUser ? [] : recentOrders;
+  const activeSchedule = schedules[0];
+  const cropPlanValue = activeSchedule
+    ? activeSchedule.cropName
+    : (isNewUser ? 'None' : 'Tomatoes');
+  const cropPlanSub = activeSchedule
+    ? `Harvest: ${activeSchedule.harvestMonth}`
+    : (isNewUser ? 'No active crop plan yet' : 'Week 6 of 14 · On track');
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // ── Stat strings (all live vars are available above) ─────────────────────
+  const walletValue = isNewUser ? `₦${liveRevenue.toLocaleString()}` : '₦287,400';
+  const walletSub = isNewUser
+    ? `₦${livePendingRevenue.toLocaleString()} pending release`
+    : '+ ₦48,500 pending release';
+  const activeOrdersValue = isNewUser ? String(liveActiveOrders) : '7';
+  const activeOrdersSub = isNewUser ? `${liveAwaitingDispatch} awaiting dispatch` : '3 awaiting dispatch';
+  const salesValue = isNewUser ? `₦${liveRevenue.toLocaleString()}` : '₦287,000';
+  const salesSub = isNewUser
+    ? (liveRevenue > 0 ? `${deliveredOrders.length} orders completed` : 'No sales yet')
+    : '↑ +24% vs last month';
+  const totalRevenueText = isNewUser ? `₦${liveRevenue.toLocaleString()}` : '₦1,115,000';
+  const totalOrdersText = isNewUser ? String(liveOrders.length) : '182';
+  const avgOrderValueText = isNewUser
+    ? (deliveredOrders.length > 0
+        ? `₦${Math.round(liveRevenue / deliveredOrders.length).toLocaleString()}`
+        : '₦0')
+    : '₦6,126';
+  const activeSalesData = isNewUser
+    ? salesData.map(d => ({ ...d, revenue: 0, orders: 0 }))
+    : salesData;
+  const listOrders = isNewUser ? liveOrders.slice(0, 4) : recentOrders;
   const listTasks = isNewUser ? [] : tasks;
   const listNotifications = isNewUser ? [] : notifications;
   const unreadCount = listNotifications.filter(n => !n.read).length;
+  // ─────────────────────────────────────────────────────────────────────────
 
   const toggleTask = (i: number) => {
     setDoneTasks(prev => {
@@ -102,21 +148,6 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
     });
   };
 
-
-// inside component:
-const [schedules, setSchedules] = useState<any[]>([]);
-useEffect(() => {
-  if (!profile?.uid) return;
-  const unsub = subscribeToPlantingSchedules(profile.uid, setSchedules);
-  return () => unsub();
-}, [profile]);
-
-const activeSchedule = schedules[0];
-const cropPlanValue = activeSchedule ? activeSchedule.cropName : (isNewUser ? 'None' : 'Tomatoes');
-const cropPlanSub = activeSchedule
-  ? `Harvest: ${activeSchedule.harvestMonth}`
-  : (isNewUser ? 'No active crop plan yet' : 'Week 6 of 14 · On track');
-  
   return (
     <div className="p-5 lg:p-6 max-w-6xl mx-auto">
       {/* Header */}
@@ -153,7 +184,8 @@ const cropPlanSub = activeSchedule
                   <div className="px-4 py-3 text-center text-xs text-gray-400">No new notifications</div>
                 ) : (
                   listNotifications.map((n, i) => (
-                    <div key={i} className="flex gap-3 px-4 py-3" style={{ background: n.read ? '#fff' : '#FAFAF8', borderBottom: '0.5px solid rgba(0,0,0,0.06)' }}>
+                    <div key={i} className="flex gap-3 px-4 py-3"
+                      style={{ background: n.read ? '#fff' : '#FAFAF8', borderBottom: '0.5px solid rgba(0,0,0,0.06)' }}>
                       <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
                         style={{ background: n.type === 'order' ? '#FAEEDA' : n.type === 'wallet' ? '#EAF3DE' : '#E6F1FB', fontSize: 12 }}>
                         {n.type === 'order' ? '📦' : n.type === 'wallet' ? '💰' : '🤖'}
@@ -209,8 +241,8 @@ const cropPlanSub = activeSchedule
             <div className="flex gap-1 p-1 rounded-lg" style={{ background: '#F1EFE8' }}>
               {(['revenue', 'orders'] as const).map(m => (
                 <button key={m} onClick={() => setChartMode(m)}
-                   className="px-2.5 py-1 rounded-md"
-                   style={{ fontSize: 11, background: chartMode === m ? '#fff' : 'transparent', color: chartMode === m ? '#27500A' : '#5F5E5A', fontWeight: chartMode === m ? 500 : 400 }}>
+                  className="px-2.5 py-1 rounded-md"
+                  style={{ fontSize: 11, background: chartMode === m ? '#fff' : 'transparent', color: chartMode === m ? '#27500A' : '#5F5E5A', fontWeight: chartMode === m ? 500 : 400 }}>
                   {m === 'revenue' ? 'Revenue' : 'Orders'}
                 </button>
               ))}
@@ -253,7 +285,7 @@ const cropPlanSub = activeSchedule
           </div>
           <p style={{ fontSize: 11, color: '#5F5E5A', marginBottom: 12 }}>Based on location, weather & soil data</p>
           <div className="space-y-2">
-            {cropSuggestions.map((c, i) => (
+            {cropSuggestions.map((c) => (
               <div key={c.name}
                 className="flex items-center gap-2 p-2.5 rounded-xl cursor-pointer transition-all"
                 style={{ border: `0.5px solid ${c.best ? '#3B6D11' : 'rgba(0,0,0,0.08)'}`, background: c.best ? '#EAF3DE' : '#F7F6F2' }}
@@ -296,7 +328,8 @@ const cropPlanSub = activeSchedule
           </div>
           {/* Progress bar */}
           <div className="h-1.5 rounded-full mb-4" style={{ background: '#EAF3DE' }}>
-            <div className="h-full rounded-full transition-all" style={{ width: `${listTasks.length === 0 ? 0 : (doneTasks.size / listTasks.length) * 100}%`, background: '#27500A' }} />
+            <div className="h-full rounded-full transition-all"
+              style={{ width: `${listTasks.length === 0 ? 0 : (doneTasks.size / listTasks.length) * 100}%`, background: '#27500A' }} />
           </div>
           <div className="space-y-2">
             {listTasks.length === 0 ? (
@@ -331,7 +364,9 @@ const cropPlanSub = activeSchedule
           <div className="flex items-center justify-between mb-3">
             <div>
               <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Recent orders</h2>
-              <p style={{ fontSize: 11, color: '#5F5E5A' }}>{isNewUser ? '0 orders' : '3 new · 2 dispatched'}</p>
+              <p style={{ fontSize: 11, color: '#5F5E5A' }}>
+                {isNewUser ? `${liveOrders.length} order${liveOrders.length !== 1 ? 's' : ''}` : '3 new · 2 dispatched'}
+              </p>
             </div>
             <button onClick={() => onNavigate('farmer-orders')} style={{ fontSize: 11, color: '#27500A' }} className="flex items-center gap-0.5">
               View all <ChevronRight size={12} />
@@ -341,18 +376,20 @@ const cropPlanSub = activeSchedule
             {listOrders.length === 0 ? (
               <div className="py-8 text-center text-xs text-gray-400">No orders received yet. Active product listings on the marketplace will appear here.</div>
             ) : (
-              listOrders.map(o => {
+              listOrders.map((o: any) => {
                 const s = statusStyle(o.status);
                 return (
                   <div key={o.id} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: '#F7F6F2' }}>
                     <div className="w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0"
-                      style={{ background: o.color, fontSize: 10, fontWeight: 500 }}>{o.avatar}</div>
+                      style={{ background: o.color || '#27500A', fontSize: 10, fontWeight: 500 }}>
+                      {o.avatar || (o.buyerName ? o.buyerName.slice(0, 2).toUpperCase() : '??')}
+                    </div>
                     <div className="flex-1 min-w-0">
-                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{o.buyer}</p>
+                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{o.buyer || o.buyerName}</p>
                       <p style={{ fontSize: 10, color: '#5F5E5A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product}</p>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>₦{o.amount.toLocaleString()}</p>
+                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>₦{Number(o.amount).toLocaleString()}</p>
                       <span className="rounded-full px-2 py-0.5" style={{ fontSize: 9, background: s.background, color: s.color }}>{s.label}</span>
                     </div>
                   </div>
@@ -363,7 +400,7 @@ const cropPlanSub = activeSchedule
           <button onClick={() => onNavigate('farmer-orders')}
             className="w-full mt-3 rounded-lg py-2 text-center"
             style={{ border: '0.5px solid rgba(0,0,0,0.12)', fontSize: 12, color: '#5F5E5A' }}>
-            View all {isNewUser ? 0 : 7} orders
+            View all {isNewUser ? liveOrders.length : 7} orders
           </button>
         </div>
       </div>

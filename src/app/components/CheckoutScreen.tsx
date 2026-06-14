@@ -46,16 +46,24 @@ function getHaversineDistance(lat1: number, lon1: number, lat2: number, lon2: nu
   return R * c; 
 }
 
-// ─── FIX: helper to extract the correct farmerUid from cart items ─────────────
-// CartItemDoc stores farmerUid (the actual uid) separately from farmerName.
-// Previous code was accidentally passing farmerName as the farmerUid, which
-// caused createOrder to write the wrong uid, so the farmer's subscription
-// (which queries by farmerUid) never found the order.
-function extractFarmerUid(items: CartItemDoc[]): string {
-  const first = items[0];
-  if (!first) return 'unassigned';
-  // Prefer the explicit farmerUid field; fall back to farmerName only as last resort
-  return (first as any).farmerUid || first.farmerName || 'unassigned';
+// ─── Group cart items by farmerUid so each farmer gets their own order ────────
+// CartItemDoc stores farmerUid as a top-level field (set by addToCart in
+// ProductDetail). We group items by that uid so a multi-farmer cart correctly
+// creates one order per farmer. Falls back to farmerName only when farmerUid is
+// absent (legacy data), but that path is now guarded below.
+function groupItemsByFarmer(items: CartItemDoc[]): { farmerUid: string; items: CartItemDoc[] }[] {
+  const map = new Map<string, CartItemDoc[]>();
+  for (const item of items) {
+    const uid = (item as any).farmerUid?.trim() || '';
+    if (!uid) {
+      // farmerUid missing — log so it's easy to diagnose in the console
+      console.warn('[CheckoutScreen] Cart item missing farmerUid:', item);
+    }
+    const key = uid || item.farmerName || 'unassigned';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(item);
+  }
+  return Array.from(map.entries()).map(([farmerUid, items]) => ({ farmerUid, items }));
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -243,20 +251,23 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
         distance: distanceInKm
       });
       try {
-        // ── FIX: use extractFarmerUid to get the real farmer UID ──────────────
-        await createOrder({
-          farmerUid: extractFarmerUid(cartItems),
-          buyerUid: auth.currentUser?.uid || 'guest',
-          buyerName: recipientName,
-          buyerPhone: recipientPhone,
-          buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-          product: cartItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
-          amount: orderTotal,
-          items: cartItems.length,
-          cartItems: cartItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
-          paymentMethod: 'card',
-        });
-        // ─────────────────────────────────────────────────────────────────────
+        // Fan out one order per farmer so each farmer's subscription fires
+        const groups = groupItemsByFarmer(cartItems);
+        await Promise.all(groups.map(({ farmerUid, items: farmerItems }) => {
+          const groupSubtotal = farmerItems.reduce((s, i) => s + i.price * i.qty, 0);
+          return createOrder({
+            farmerUid,
+            buyerUid: auth.currentUser?.uid || 'guest',
+            buyerName: recipientName,
+            buyerPhone: recipientPhone,
+            buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+            product: farmerItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
+            amount: groups.length === 1 ? orderTotal : groupSubtotal,
+            items: farmerItems.length,
+            cartItems: farmerItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
+            paymentMethod: 'card',
+          });
+        }));
         const uid = auth.currentUser?.uid;
         if (uid) await clearCart(uid);
       } catch (err) {
@@ -283,20 +294,22 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
         distance: distanceInKm
       });
       try {
-        // ── FIX: use extractFarmerUid ─────────────────────────────────────────
-        await createOrder({
-          farmerUid: extractFarmerUid(cartItems),
-          buyerUid: auth.currentUser?.uid || 'guest',
-          buyerName: recipientName,
-          buyerPhone: recipientPhone,
-          buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-          product: cartItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
-          amount: orderTotal,
-          items: cartItems.length,
-          cartItems: cartItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
-          paymentMethod: 'bank',
-        });
-        // ─────────────────────────────────────────────────────────────────────
+        const groups = groupItemsByFarmer(cartItems);
+        await Promise.all(groups.map(({ farmerUid, items: farmerItems }) => {
+          const groupSubtotal = farmerItems.reduce((s, i) => s + i.price * i.qty, 0);
+          return createOrder({
+            farmerUid,
+            buyerUid: auth.currentUser?.uid || 'guest',
+            buyerName: recipientName,
+            buyerPhone: recipientPhone,
+            buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+            product: farmerItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
+            amount: groups.length === 1 ? orderTotal : groupSubtotal,
+            items: farmerItems.length,
+            cartItems: farmerItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
+            paymentMethod: 'bank',
+          });
+        }));
         const uid = auth.currentUser?.uid;
         if (uid) await clearCart(uid);
       } catch (err) {
@@ -325,20 +338,22 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
     });
 
     try {
-      // ── FIX: use extractFarmerUid ───────────────────────────────────────────
-      await createOrder({
-        farmerUid: extractFarmerUid(cartItems),
-        buyerUid: auth.currentUser?.uid || 'guest',
-        buyerName: recipientName,
-        buyerPhone: recipientPhone,
-        buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-        product: cartItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
-        amount: orderTotal,
-        items: cartItems.length,
-        cartItems: cartItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
-        paymentMethod: 'ussd',
-      });
-      // ───────────────────────────────────────────────────────────────────────
+      const groups = groupItemsByFarmer(cartItems);
+      await Promise.all(groups.map(({ farmerUid, items: farmerItems }) => {
+        const groupSubtotal = farmerItems.reduce((s, i) => s + i.price * i.qty, 0);
+        return createOrder({
+          farmerUid,
+          buyerUid: auth.currentUser?.uid || 'guest',
+          buyerName: recipientName,
+          buyerPhone: recipientPhone,
+          buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+          product: farmerItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
+          amount: groups.length === 1 ? orderTotal : groupSubtotal,
+          items: farmerItems.length,
+          cartItems: farmerItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
+          paymentMethod: 'ussd',
+        });
+      }));
       const uid = auth.currentUser?.uid;
       if (uid) await clearCart(uid);
     } catch (err) {

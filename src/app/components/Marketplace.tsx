@@ -83,6 +83,7 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
       addToCart(uid, {
         id: product.id,
         name: product.name,
+        farmerUid: product.farmerUid,
         farmerName: product.farmer,
         price: product.price,
         unit: product.unit,
