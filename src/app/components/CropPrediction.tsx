@@ -5,7 +5,7 @@ import { CropPredictionMap } from './CropPredictionMap';
 import { searchLocation } from '../services/geocoding.service';
 import { fetchLiveWeather } from '../services/weather.service';
 import { NIGERIA_CROPS } from '../data/nigeriaCrops';
-import { logUserAction, savePlantingSchedule } from '../firebase';
+import { logUserAction, savePlantingSchedule, subscribeToMarketplaceProducts } from '../firebase';
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
 const farmFields = [
@@ -247,6 +247,15 @@ export function CropPrediction({ onNavigate, profile }: Props) {
     rainfall: string;
   } | null>(null);
 
+  const [farmerProducts, setFarmerProducts] = useState<{ name: string; category: string }[]>([]);
+
+  useEffect(() => {
+    const unsub = subscribeToMarketplaceProducts((products) => {
+      setFarmerProducts(products.map((p: any) => ({ name: (p.name || '').toLowerCase(), category: (p.category || '').toLowerCase() })));
+    });
+    return () => unsub();
+  }, []);
+
   const currentCenter = activeField === -1 && customLocation
     ? customLocation
     : { lat: farmFields[activeField]?.lat || 10.5300, lng: farmFields[activeField]?.lng || 7.4200 };
@@ -371,7 +380,25 @@ export function CropPrediction({ onNavigate, profile }: Props) {
       )
     : currentAnalysis;
 
-  const cropList = recommendationsAnalysis.crops;
+  const rawCropList = recommendationsAnalysis.crops;
+
+  const farmerCategories = new Set(farmerProducts.map(p => p.category));
+
+  const cropList = rawCropList.map(c => {
+    const cName = c.name.toLowerCase();
+    const nameMatch = farmerProducts.some(p =>
+      p.name.includes(cName) || cName.split(' ').some(w => w.length > 3 && p.name.includes(w))
+    );
+    const catMatch = farmerCategories.has(c.category.toLowerCase());
+    const farmerScore = (nameMatch ? 3 : 0) + (catMatch ? 1 : 0);
+    return { ...c, farmerScore, fromFarmer: nameMatch };
+  }).sort((a, b) => {
+    if (farmerProducts.length === 0) return b.match - a.match;
+    if (b.farmerScore !== a.farmerScore) return b.farmerScore - a.farmerScore;
+    return b.match - a.match;
+  });
+
+  const farmerMatchCount = cropList.filter(c => c.fromFarmer).length;
 
   const crop = cropList[selectedCrop] || cropList[0];
 
@@ -821,6 +848,11 @@ export function CropPrediction({ onNavigate, profile }: Props) {
 
             {runAnalysis && (
               <div id="crops_recommendations_list">
+                {farmerMatchCount > 0 && (
+                  <p style={{ fontSize: 10, color: '#639922', marginBottom: 6, fontWeight: 500 }}>
+                    🌾 {farmerMatchCount} crop{farmerMatchCount > 1 ? 's' : ''} available from local farmers · sorted by availability &amp; match
+                  </p>
+                )}
                 {/* Floating horizontal scroll row */}
                 <div className="flex gap-2 overflow-x-auto pb-2" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
                   {cropList.map((c, i) => (
@@ -831,8 +863,8 @@ export function CropPrediction({ onNavigate, profile }: Props) {
                       className="rounded-xl p-3 cursor-pointer transition-all flex-shrink-0"
                       style={{
                         width: 148,
-                        border: i === selectedCrop ? '1.5px solid #3B6D11' : '0.5px solid rgba(0,0,0,0.1)',
-                        background: i === selectedCrop ? '#EAF3DE' : '#F7F6F2',
+                        border: i === selectedCrop ? '1.5px solid #3B6D11' : c.fromFarmer ? '1px solid #A8D078' : '0.5px solid rgba(0,0,0,0.1)',
+                        background: i === selectedCrop ? '#EAF3DE' : c.fromFarmer ? '#F4FAF0' : '#F7F6F2',
                         opacity: loading ? 0.4 : 1,
                         boxShadow: i === selectedCrop ? '0 2px 8px rgba(39,80,10,0.15)' : 'none',
                       }}
@@ -844,6 +876,7 @@ export function CropPrediction({ onNavigate, profile }: Props) {
                       <p style={{ fontSize: 12, fontWeight: 500, color: '#444441', marginBottom: 2 }}>{c.name}</p>
                       <div className="flex gap-1 mb-2 flex-wrap">
                         {i === 0 && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#27500A', color: '#fff' }}>Best fit</span>}
+                        {c.fromFarmer && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#639922', color: '#fff' }}>In market</span>}
                         <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#F1EFE8', color: '#5F5E5A' }}>{c.category}</span>
                       </div>
                       <div className="h-1.5 rounded-full mb-2" style={{ background: '#D4E8C2' }}>
