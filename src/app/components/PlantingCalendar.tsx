@@ -227,6 +227,61 @@ const handleSwitchSchedule = (scheduleId: string) => {
           </div>
         </div>
 
+        {/* Month Calendar Grid */}
+        <div className="rounded-xl overflow-hidden mb-5" style={{ border: '0.5px solid rgba(0,0,0,0.12)' }}>
+          <div className="flex items-center justify-between px-4 py-3" style={{ background: '#F1EFE8', borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
+            <button onClick={() => setViewMonth(prev => {
+              const months = ['January 2026','February 2026','March 2026','April 2026','May 2026','June 2026','July 2026','August 2026','September 2026','October 2026','November 2026','December 2026'];
+              const idx = months.indexOf(prev);
+              return months[Math.max(0, idx - 1)];
+            })} className="p-1.5 rounded-lg" style={{ border: '0.5px solid rgba(0,0,0,0.12)' }} aria-label="Previous month">
+              <ChevronLeft size={13} style={{ color: '#5F5E5A' }} />
+            </button>
+            <span style={{ fontSize: 13, fontWeight: 500, color: '#444441' }}>{viewMonth}</span>
+            <button onClick={() => setViewMonth(prev => {
+              const months = ['January 2026','February 2026','March 2026','April 2026','May 2026','June 2026','July 2026','August 2026','September 2026','October 2026','November 2026','December 2026'];
+              const idx = months.indexOf(prev);
+              return months[Math.min(months.length - 1, idx + 1)];
+            })} className="p-1.5 rounded-lg" style={{ border: '0.5px solid rgba(0,0,0,0.12)' }} aria-label="Next month">
+              <ChevronRight size={13} style={{ color: '#5F5E5A' }} />
+            </button>
+          </div>
+          <div className="grid grid-cols-7" style={{ background: '#F7F6F2', borderBottom: '0.5px solid rgba(0,0,0,0.06)' }}>
+            {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
+              <div key={d} className="text-center py-2" style={{ fontSize: 10, color: '#5F5E5A', fontWeight: 500 }}>{d}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7">
+            {/* June 2026 starts on Monday (day 1) */}
+            {Array.from({ length: 30 }).map((_, i) => {
+              const day = i + 1;
+              const phaseKey = day <= 7 ? 'pre' : day <= 19 ? 'planting' : 'post';
+              const phaseData = phases.find(p => p.key === phaseKey)!;
+              const taskIdx = allTasks.findIndex(t => t.day === day);
+              const hasTask = taskIdx >= 0;
+              const isDone = hasTask && doneTasks.has(taskIdx);
+              const isToday = day === 14;
+              return (
+                <div key={day} className="p-1.5 transition-all"
+                  style={{ minHeight: 60, border: '0.5px solid rgba(0,0,0,0.04)', background: isToday ? '#EAF3DE' : '#fff' }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="w-5 h-5 rounded-full flex items-center justify-center"
+                      style={{ fontSize: 10, background: isToday ? '#27500A' : 'transparent', color: isToday ? '#fff' : '#444441', fontWeight: isToday ? 600 : 400 }}>
+                      {day}
+                    </span>
+                    {hasTask && <div className="w-1.5 h-1.5 rounded-full" style={{ background: isDone ? '#aaa' : phaseData.color }} />}
+                  </div>
+                  {hasTask && (
+                    <p style={{ fontSize: 8, color: isDone ? '#bbb' : phaseData.color, textDecoration: isDone ? 'line-through' : 'none', lineHeight: 1.3, fontWeight: 500 }}>
+                      {allTasks[taskIdx].task.slice(0, 24)}{allTasks[taskIdx].task.length > 24 ? '…' : ''}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         {/* Phase legend + filter */}
         <div className="flex flex-wrap gap-2 mb-4">
           <button onClick={() => setActivePhaseFilter(null)}

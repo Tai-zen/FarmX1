@@ -1,4 +1,4 @@
-export type UserRole = 'farmer' | 'consumer';
+export type UserRole = 'farmer' | 'consumer' | 'admin';
 export type Screen =
   | 'login'
   | 'farmer-dashboard'
@@ -13,7 +13,9 @@ export type Screen =
   | 'cart'
   | 'checkout'
   | 'order-tracking'
-  | 'add-listing';
+  | 'add-listing'
+  | 'admin-dashboard'
+  | 'profile-settings';
 
 export interface AppState {
   role: UserRole | null;

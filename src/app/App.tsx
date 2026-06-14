@@ -15,6 +15,8 @@ import { CartScreen } from './components/CartScreen';
 import { CheckoutScreen } from './components/CheckoutScreen';
 import { OrderTracking } from './components/OrderTracking';
 import { AddListing } from './components/AddListing';
+import { AdminDashboard } from './components/AdminDashboard';
+import { ProfileSettings } from './components/ProfileSettings';
 import { AIChatWidget } from './components/AIChatWidget';
 import { UserRole, Screen } from './components/types';
 import { LogOut } from 'lucide-react';
@@ -25,17 +27,19 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('login');
   const [cartCount, setCartCount] = useState(0);
   const [profile, setProfile] = useState<any | null>(null);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  // Sync auth state on mount
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
       if (currentUser) {
         try {
           const fetchedProfile = await getUserProfile(currentUser.uid);
           if (fetchedProfile) {
-            setRole(fetchedProfile.role);
+            const r = fetchedProfile.role as UserRole;
+            setRole(r);
             setProfile(fetchedProfile);
-            setScreen(fetchedProfile.role === 'farmer' ? 'farmer-dashboard' : 'consumer-dashboard');
+            if (r === 'admin') setScreen('admin-dashboard');
+            else setScreen(r === 'farmer' ? 'farmer-dashboard' : 'consumer-dashboard');
           }
         } catch (error) {
           console.error("Error loading user profile on auth change:", error);
@@ -45,13 +49,9 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Sync cart count from Firestore whenever a user is logged in
   useEffect(() => {
     const uid = auth.currentUser?.uid;
-    if (!uid) {
-      setCartCount(0);
-      return;
-    }
+    if (!uid) { setCartCount(0); return; }
     const unsub = subscribeToCart(uid, (items) => {
       setCartCount(items.length);
     });
@@ -61,7 +61,8 @@ export default function App() {
   const handleLogin = (r: UserRole, userProfile?: any) => {
     setRole(r);
     setProfile(userProfile || null);
-    setScreen(r === 'farmer' ? 'farmer-dashboard' : 'consumer-dashboard');
+    if (r === 'admin') setScreen('admin-dashboard');
+    else setScreen(r === 'farmer' ? 'farmer-dashboard' : 'consumer-dashboard');
   };
 
   const handleLogout = () => {
@@ -70,6 +71,7 @@ export default function App() {
     setProfile(null);
     setScreen('login');
     setCartCount(0);
+    setShowLogoutConfirm(false);
   };
 
   const [selectedProductId, setSelectedProductId] = useState<string | undefined>(undefined);
@@ -85,10 +87,8 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen" style={{ background: '#FAFAF8', fontFamily: 'Arial, sans-serif' }}>
-      {/* Sidebar (desktop) */}
       <Sidebar role={role} activeScreen={screen} onNavigate={navigate} cartCount={cartCount} profile={profile} />
 
-      {/* Main content */}
       <main className="flex-1 overflow-y-auto pb-20 lg:pb-0" style={{ minWidth: 0 }}>
         {/* Mobile top bar */}
         <div className="sticky top-0 z-40 flex items-center justify-between px-5 py-3 lg:hidden"
@@ -101,10 +101,10 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             <span className="rounded-full px-2 py-0.5"
-              style={{ fontSize: 10, background: role === 'farmer' ? '#EAF3DE' : '#E6F1FB', color: role === 'farmer' ? '#27500A' : '#185FA5' }}>
-              {role === 'farmer' ? '🌾 Farmer' : '🛒 Consumer'}
+              style={{ fontSize: 10, background: role === 'farmer' ? '#EAF3DE' : role === 'admin' ? '#F3E8FF' : '#E6F1FB', color: role === 'farmer' ? '#27500A' : role === 'admin' ? '#6B21A8' : '#185FA5' }}>
+              {role === 'farmer' ? '🌾 Farmer' : role === 'admin' ? '🛡 Admin' : '🛒 Consumer'}
             </span>
-            <button onClick={handleLogout} aria-label="Log out">
+            <button onClick={() => setShowLogoutConfirm(true)} aria-label="Log out">
               <LogOut size={16} style={{ color: '#5F5E5A' }} />
             </button>
           </div>
@@ -114,10 +114,10 @@ export default function App() {
         <div className="hidden lg:flex items-center justify-end gap-3 px-6 py-3"
           style={{ borderBottom: '0.5px solid rgba(0,0,0,0.07)' }}>
           <span className="rounded-full px-2.5 py-1"
-            style={{ fontSize: 11, background: role === 'farmer' ? '#EAF3DE' : '#E6F1FB', color: role === 'farmer' ? '#27500A' : '#185FA5' }}>
-            {role === 'farmer' ? '🌾 Farmer mode' : '🛒 Consumer mode'}
+            style={{ fontSize: 11, background: role === 'farmer' ? '#EAF3DE' : role === 'admin' ? '#F3E8FF' : '#E6F1FB', color: role === 'farmer' ? '#27500A' : role === 'admin' ? '#6B21A8' : '#185FA5' }}>
+            {role === 'farmer' ? '🌾 Farmer mode' : role === 'admin' ? '🛡 Admin mode' : '🛒 Consumer mode'}
           </span>
-          <button onClick={handleLogout} className="flex items-center gap-1.5"
+          <button onClick={() => setShowLogoutConfirm(true)} className="flex items-center gap-1.5"
             style={{ fontSize: 12, color: '#5F5E5A' }} aria-label="Log out">
             <LogOut size={13} /> Log out
           </button>
@@ -136,7 +136,7 @@ export default function App() {
         {screen === 'marketplace' && (
           <Marketplace
             onNavigate={(s, id) => navigate(s, id)}
-            onAddToCart={() => {}} // cart count now driven by Firestore subscription
+            onAddToCart={() => {}}
           />
         )}
         {screen === 'product-detail' && (
@@ -149,18 +149,53 @@ export default function App() {
         {screen === 'cart' && (
           <CartScreen
             onNavigate={navigate}
-            onCartChange={() => {}} // cart count now driven by Firestore subscription
+            onCartChange={() => {}}
           />
         )}
         {screen === 'checkout' && <CheckoutScreen onNavigate={navigate} profile={profile} />}
-        {screen === 'order-tracking' && <OrderTracking role={role} onNavigate={navigate} profile={profile} />}
+        {screen === 'order-tracking' && <OrderTracking role={role === 'admin' ? 'farmer' : role} onNavigate={navigate} profile={profile} />}
+        {screen === 'admin-dashboard' && <AdminDashboard onNavigate={navigate} profile={profile} />}
+        {screen === 'profile-settings' && <ProfileSettings onNavigate={navigate} profile={profile} onProfileUpdate={(p) => setProfile(p)} />}
       </main>
 
-      {/* Bottom nav (mobile) */}
-      <MobileNav role={role} activeScreen={screen} onNavigate={navigate} cartCount={cartCount} />
+      <MobileNav role={role === 'admin' ? 'farmer' : role} activeScreen={screen} onNavigate={navigate} cartCount={cartCount} />
 
-      {/* AI Chat Widget */}
-      <AIChatWidget role={role} />
+      <AIChatWidget role={role === 'admin' ? 'farmer' : role} />
+
+      {/* Logout confirmation dialog */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.4)' }}
+          onClick={() => setShowLogoutConfirm(false)}>
+          <div className="rounded-2xl p-6 w-full max-w-sm mx-4 shadow-xl"
+            style={{ background: '#fff' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-4"
+              style={{ background: '#FEF3C7' }}>
+              <LogOut size={22} style={{ color: '#92400E' }} />
+            </div>
+            <h2 style={{ fontSize: 17, fontWeight: 600, color: '#444441', textAlign: 'center', marginBottom: 8 }}>
+              Log out of FarmX?
+            </h2>
+            <p style={{ fontSize: 13, color: '#5F5E5A', textAlign: 'center', marginBottom: 24 }}>
+              You'll need to sign in again to access your account.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                className="flex-1 rounded-xl py-2.5 transition-all"
+                style={{ border: '0.5px solid rgba(0,0,0,0.15)', fontSize: 14, color: '#444441', background: '#F7F6F2' }}>
+                Cancel
+              </button>
+              <button
+                onClick={handleLogout}
+                className="flex-1 rounded-xl py-2.5 transition-all"
+                style={{ background: '#A32D2D', color: '#fff', fontSize: 14, fontWeight: 500 }}>
+                Log out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

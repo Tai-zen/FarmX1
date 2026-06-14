@@ -37,8 +37,17 @@ const consumerNav: NavSection[] = [
     { screen: 'order-tracking',     icon: Package,         label: 'My Orders' },
   ]},
   { label: 'Account', items: [
-    { screen: 'consumer-dashboard', icon: BarChart3, label: 'Spending' },
-    { screen: 'consumer-dashboard', icon: Settings,  label: 'Settings' },
+    { screen: 'profile-settings', icon: Settings, label: 'Settings' },
+  ]},
+];
+
+const adminNav: NavSection[] = [
+  { label: 'Admin', items: [
+    { screen: 'admin-dashboard', icon: LayoutDashboard, label: 'Overview' },
+    { screen: 'order-tracking',  icon: ClipboardList,   label: 'All Orders' },
+  ]},
+  { label: 'Account', items: [
+    { screen: 'profile-settings', icon: Settings, label: 'Settings' },
   ]},
 ];
 
@@ -68,11 +77,11 @@ export function Sidebar({ role, activeScreen, onNavigate, cartCount = 0, profile
       { screen: 'wallet',         icon: Wallet,        label: 'Wallet' },
     ]},
     { label: 'Account', items: [
-      { screen: 'farmer-dashboard', icon: Settings, label: 'Settings' },
+      { screen: 'profile-settings', icon: Settings, label: 'Settings' },
     ]},
   ];
 
-  const nav = role === 'farmer' ? farmerNav : consumerNav;
+  const nav = role === 'farmer' ? farmerNav : role === 'admin' ? adminNav : consumerNav;
 
   const displayName = profile
     ? profile.fullName

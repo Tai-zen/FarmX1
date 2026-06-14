@@ -110,6 +110,13 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
   const [processing, setProcessing] = useState(false);
   const [done, setDone] = useState(false);
 
+  useEffect(() => {
+    if (done) {
+      const timer = setTimeout(() => onNavigate('order-tracking'), 2500);
+      return () => clearTimeout(timer);
+    }
+  }, [done]);
+
   const matchedState = NIGERIAN_STATES.find(s => s.name.trim().toLowerCase() === selectedState.trim().toLowerCase()) || NIGERIAN_STATES[0];
   const activeLat = matchedState.lat;
   const activeLng = matchedState.lng;

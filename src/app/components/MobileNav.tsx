@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutDashboard, Sprout, ShoppingBag, Wallet, ShoppingCart, Package } from 'lucide-react';
+import { LayoutDashboard, Sprout, ShoppingBag, Wallet, ShoppingCart, Package, CalendarDays } from 'lucide-react';
 import { Screen, UserRole } from './types';
 
 interface Props {
@@ -13,6 +13,7 @@ export function MobileNav({ role, activeScreen, onNavigate, cartCount = 0 }: Pro
   const farmerItems = [
     { screen: 'farmer-dashboard' as Screen, icon: LayoutDashboard, label: 'Home' },
     { screen: 'crop-prediction' as Screen, icon: Sprout, label: 'Crop AI' },
+    { screen: 'planting-calendar' as Screen, icon: CalendarDays, label: 'Calendar' },
     { screen: 'my-listings' as Screen, icon: ShoppingBag, label: 'Listings' },
     { screen: 'wallet' as Screen, icon: Wallet, label: 'Wallet' },
   ];
@@ -40,7 +41,7 @@ export function MobileNav({ role, activeScreen, onNavigate, cartCount = 0 }: Pro
           >
             <item.icon size={20} aria-hidden="true" />
             <span style={{ fontSize: 9 }}>{item.label}</span>
-            {'badge' in item && item.badge && item.badge > 0 && (
+            {'badge' in item && item.badge !== undefined && item.badge > 0 && (
               <span className="absolute -top-0.5 right-1 w-4 h-4 rounded-full flex items-center justify-center"
                 style={{ fontSize: 8, background: '#185FA5', color: '#fff' }}>
                 {item.badge}

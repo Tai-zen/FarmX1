@@ -599,21 +599,6 @@ export function LoginScreen({ onLogin }: Props) {
             </button>
           </p>
 
-          {mode === 'login' && (
-            <div className="mt-8 pt-6" style={{ borderTop: '0.5px solid rgba(0,0,0,0.1)' }}>
-              <p style={{ fontSize: 11, color: '#5F5E5A', marginBottom: 8 }} className="font-mono uppercase tracking-wider">Fast Sandbox Sign in (Local audit logger enabled):</p>
-              <div className="flex gap-2">
-                <button onClick={() => handleDemoLogin('farmer')} className="flex-1 rounded-lg py-2.5 cursor-pointer text-xs transition"
-                  style={{ background: '#EAF3DE', color: '#27500A', border: '0.5px solid #3B6D11' }}>
-                  🌾 Farmer Sandbox
-                </button>
-                <button onClick={() => handleDemoLogin('consumer')} className="flex-1 rounded-lg py-2.5 cursor-pointer text-xs transition"
-                  style={{ background: '#E6F1FB', color: '#0C447C', border: '0.5px solid #185FA5' }}>
-                  🛒 Consumer Sandbox
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

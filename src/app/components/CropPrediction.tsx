@@ -820,50 +820,60 @@ export function CropPrediction({ onNavigate, profile }: Props) {
             )}
 
             {runAnalysis && (
-              <div className="space-y-2" id="crops_recommendations_list">
-                {cropList.map((c, i) => (
-                  <div
-                    key={c.name}
-                    id={`crop_item_${i}`}
-                    onClick={() => setSelectedCrop(i)}
-                    className="rounded-xl p-3 cursor-pointer transition-all"
-                    style={{
-                      border: i === selectedCrop ? '1px solid #3B6D11' : '0.5px solid rgba(0,0,0,0.1)',
-                      background: i === selectedCrop ? '#EAF3DE' : '#F7F6F2',
-                      opacity: loading ? 0.4 : 1,
-                    }}
-                  >
-                    <div className="flex items-start gap-2.5">
-                      <span style={{ fontSize: 20, flexShrink: 0 }}>{c.emoji}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{c.name}</span>
-                            {i === 0 && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#27500A', color: '#fff' }}>Best fit</span>}
-                            <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#F1EFE8', color: '#5F5E5A' }}>{c.category}</span>
-                          </div>
-                          <span style={{ fontSize: 14, fontWeight: 500, color: '#27500A', flexShrink: 0 }}>{c.match}%</span>
-                        </div>
-                        <div className="h-1.5 rounded-full mb-2" style={{ background: '#D4E8C2' }}>
-                          <div className="h-full rounded-full transition-all" style={{ width: `${c.match}%`, background: i === 0 ? '#27500A' : '#639922' }} />
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span style={{ fontSize: 10, color: '#5F5E5A' }}>🗓 {c.harvest}</span>
-                          <span style={{ fontSize: 10, color: '#5F5E5A' }}>💧 {c.water} water</span>
-                          <span style={{ fontSize: 10, color: '#5F5E5A' }}>⏱ {c.duration}</span>
-                        </div>
-                        {i === selectedCrop && (
-                          <div className="mt-2 pt-2" style={{ borderTop: '0.5px solid rgba(0,0,0,0.1)' }}>
-                            <div className="flex gap-1 mb-1">
-                              <Info size={11} style={{ color: '#5F5E5A', flexShrink: 0, marginTop: 1 }} />
-                              <p style={{ fontSize: 11, color: '#5F5E5A', lineHeight: 1.5 }}>{c.reason}</p>
-                            </div>
-                          </div>
-                        )}
+              <div id="crops_recommendations_list">
+                {/* Floating horizontal scroll row */}
+                <div className="flex gap-2 overflow-x-auto pb-2" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+                  {cropList.map((c, i) => (
+                    <div
+                      key={c.name}
+                      id={`crop_item_${i}`}
+                      onClick={() => setSelectedCrop(i)}
+                      className="rounded-xl p-3 cursor-pointer transition-all flex-shrink-0"
+                      style={{
+                        width: 148,
+                        border: i === selectedCrop ? '1.5px solid #3B6D11' : '0.5px solid rgba(0,0,0,0.1)',
+                        background: i === selectedCrop ? '#EAF3DE' : '#F7F6F2',
+                        opacity: loading ? 0.4 : 1,
+                        boxShadow: i === selectedCrop ? '0 2px 8px rgba(39,80,10,0.15)' : 'none',
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span style={{ fontSize: 24 }}>{c.emoji}</span>
+                        <span style={{ fontSize: 14, fontWeight: 600, color: i === 0 ? '#27500A' : '#639922' }}>{c.match}%</span>
                       </div>
+                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441', marginBottom: 2 }}>{c.name}</p>
+                      <div className="flex gap-1 mb-2 flex-wrap">
+                        {i === 0 && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#27500A', color: '#fff' }}>Best fit</span>}
+                        <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#F1EFE8', color: '#5F5E5A' }}>{c.category}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full mb-2" style={{ background: '#D4E8C2' }}>
+                        <div className="h-full rounded-full transition-all" style={{ width: `${c.match}%`, background: i === 0 ? '#27500A' : '#639922' }} />
+                      </div>
+                      <p style={{ fontSize: 9, color: '#5F5E5A' }}>🗓 {c.harvest}</p>
+                      <p style={{ fontSize: 9, color: '#5F5E5A' }}>💧 {c.water} · ⏱ {c.duration}</p>
+                    </div>
+                  ))}
+                </div>
+                {/* Selected crop detail */}
+                {cropList[selectedCrop] && (
+                  <div className="mt-3 rounded-xl p-3" style={{ background: '#EAF3DE', border: '0.5px solid rgba(39,80,10,0.2)' }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span style={{ fontSize: 18 }}>{cropList[selectedCrop].emoji}</span>
+                      <span style={{ fontSize: 13, fontWeight: 500, color: '#27500A' }}>{cropList[selectedCrop].name}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: '#27500A', marginLeft: 'auto' }}>{cropList[selectedCrop].match}% match</span>
+                    </div>
+                    <div className="flex gap-1 mb-2">
+                      <Info size={11} style={{ color: '#5F5E5A', flexShrink: 0, marginTop: 1 }} />
+                      <p style={{ fontSize: 11, color: '#5F5E5A', lineHeight: 1.5 }}>{cropList[selectedCrop].reason}</p>
+                    </div>
+                    <div className="flex gap-3 flex-wrap">
+                      <span style={{ fontSize: 10, color: '#27500A' }}>🗓 Harvest: {cropList[selectedCrop].harvest}</span>
+                      <span style={{ fontSize: 10, color: '#27500A' }}>💧 {cropList[selectedCrop].water} water</span>
+                      <span style={{ fontSize: 10, color: '#27500A' }}>🌡 {cropList[selectedCrop].temp}</span>
+                      <span style={{ fontSize: 10, color: '#27500A' }}>⏱ {cropList[selectedCrop].duration}</span>
                     </div>
                   </div>
-                ))}
+                )}
               </div>
             )}
           </div>

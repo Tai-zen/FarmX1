@@ -133,12 +133,44 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
   const totalOrdersValue = isDemo ? '34' : String(realOrders.length);
   const totalOrdersSub = isDemo ? '98% delivery success' : (realOrders.length > 0 ? 'Order history' : 'Ready for your first order');
 
-  // Spend breakdown: for real users, show flat breakdown based on total
-  const activeSpendData = isDemo
-    ? demoSpendData
-    : demoSpendData.map(d => ({ ...d, value: 0 }));
+  // Spend breakdown: categorise real orders by product keyword
+  const activeSpendData = (() => {
+    if (isDemo) return demoSpendData;
+    if (realOrders.length === 0) return demoSpendData.map(d => ({ ...d, value: 0 }));
+    const cats: Record<string, number> = { Vegetables: 0, Grains: 0, Fruits: 0, Others: 0 };
+    realOrders.forEach(o => {
+      const name = (o.product || '').toLowerCase();
+      if (/tomato|pepper|onion|carrot|cabbage|spinach|yam|cassava|potato/.test(name)) cats.Vegetables += o.amount || 0;
+      else if (/maize|corn|rice|wheat|sorghum|millet|cowpea|soya|bean/.test(name)) cats.Grains += o.amount || 0;
+      else if (/orange|mango|banana|pineapple|watermelon|guava|fruit/.test(name)) cats.Fruits += o.amount || 0;
+      else cats.Others += o.amount || 0;
+    });
+    const result = [
+      { name: 'Vegetables', value: cats.Vegetables, color: '#3B6D11' },
+      { name: 'Grains', value: cats.Grains, color: '#639922' },
+      { name: 'Fruits', value: cats.Fruits, color: '#185FA5' },
+      { name: 'Others', value: cats.Others, color: '#854F0B' },
+    ].filter(d => d.value > 0);
+    return result.length > 0 ? result : demoSpendData.map(d => ({ ...d, value: 0 }));
+  })();
 
-  const activeWeeklyData = isDemo ? demoWeeklySpend : demoWeeklySpend.map(d => ({ ...d, amount: 0 }));
+  // Weekly spend: group real orders by week
+  const activeWeeklyData = (() => {
+    if (isDemo) return demoWeeklySpend;
+    if (realOrders.length === 0) return demoWeeklySpend.map(d => ({ ...d, amount: 0 }));
+    const weekMap: Record<string, number> = {};
+    realOrders.forEach(o => {
+      const date = o.createdAt?.toDate?.() ? new Date(o.createdAt.toDate()) : new Date();
+      const weekNum = Math.ceil(date.getDate() / 7);
+      const month = date.toLocaleString('en-NG', { month: 'short' });
+      const key = `W${weekNum} ${month}`;
+      weekMap[key] = (weekMap[key] || 0) + (o.amount || 0);
+    });
+    const sorted = Object.entries(weekMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([week, amount]) => ({ week, amount }));
+    return sorted.length > 0 ? sorted : demoWeeklySpend.map(d => ({ ...d, amount: 0 }));
+  })();
   const displayTotalSpend = isDemo ? demoSpendData.reduce((a,b)=>a+b.value,0) : totalSpent;
 
   const showTransitBanner = !isDemo && inTransitCount > 0;
