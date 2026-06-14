@@ -135,7 +135,7 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
     ? salesData.map(d => ({ ...d, revenue: 0, orders: 0 }))
     : salesData;
   const listOrders = isNewUser ? liveOrders.slice(0, 4) : recentOrders;
-  const listTasks = isNewUser ? [] : tasks;
+  const listTasks = activeSchedule ? tasks : (isNewUser ? [] : tasks);
   const listNotifications = isNewUser ? [] : notifications;
   const unreadCount = listNotifications.filter(n => !n.read).length;
   // ─────────────────────────────────────────────────────────────────────────

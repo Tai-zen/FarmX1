@@ -72,7 +72,12 @@ export default function App() {
     setCartCount(0);
   };
 
-  const navigate = (s: Screen) => setScreen(s);
+  const [selectedProductId, setSelectedProductId] = useState<string | undefined>(undefined);
+
+  const navigate = (s: Screen, productId?: string) => {
+    if (productId !== undefined) setSelectedProductId(productId);
+    setScreen(s);
+  };
 
   if (!role || screen === 'login') {
     return <LoginScreen onLogin={handleLogin} />;
@@ -130,14 +135,15 @@ export default function App() {
         {screen === 'consumer-dashboard' && <ConsumerDashboard onNavigate={navigate} profile={profile} />}
         {screen === 'marketplace' && (
           <Marketplace
-            onNavigate={(s) => navigate(s)}
+            onNavigate={(s, id) => navigate(s, id)}
             onAddToCart={() => {}} // cart count now driven by Firestore subscription
           />
         )}
         {screen === 'product-detail' && (
           <ProductDetail
             onNavigate={navigate}
-            onAddToCart={() => {}} // cart count now driven by Firestore subscription
+            onAddToCart={() => {}}
+            productId={selectedProductId}
           />
         )}
         {screen === 'cart' && (

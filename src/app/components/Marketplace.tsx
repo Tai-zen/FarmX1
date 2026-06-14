@@ -26,6 +26,7 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
         category: p.category,
         price: p.price,
         unit: p.unit,
+        farmerUid: p.farmerUid || '',
         farmer: p.farmerName || 'FarmX Farmer',
         location: p.farmState || 'Nigeria',
         rating: 4.5,

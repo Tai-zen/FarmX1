@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Truck, Phone, MessageCircle, Search, ChevronDown, ChevronUp } from 'lucide-react';
-import { subscribeToFarmerOrders, auth } from '../firebase';
+import { subscribeToFarmerOrders, updateOrderStatus, auth } from '../firebase';
 
 const demoOrders = [
   { id: 'ORD-8821', buyer: 'Fatima Bello', location: 'Abuja FCT', phone: '+234 802 345 6789', product: 'Roma Tomatoes × 20kg', amount: 14000, status: 'new', time: '2h ago', avatar: 'FB', color: '#185FA5', items: 1 },
@@ -22,28 +22,53 @@ const statusStyle: Record<Tab, { bg: string; color: string }> = {
   delivered: { bg: '#EAF3DE', color: '#27500A' },
 };
 
+function formatOrderTime(createdAt: any): string {
+  if (!createdAt) return '';
+  const ms = createdAt?.toMillis ? createdAt.toMillis() : new Date(createdAt).getTime();
+  const diff = Date.now() - ms;
+  const hours = Math.floor(diff / 3600000);
+  if (hours < 1) return 'Just now';
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  return `${days}d ago`;
+}
+
+function normalizeOrder(o: any) {
+  return {
+    ...o,
+    buyer: o.buyer || o.buyerName || 'Unknown buyer',
+    location: o.location || o.buyerLocation || '—',
+    phone: o.phone || o.buyerPhone || '',
+    avatar: o.avatar || (o.buyerName ? o.buyerName.slice(0, 2).toUpperCase() : '??'),
+    color: o.color || '#27500A',
+    time: o.time || formatOrderTime(o.createdAt),
+    items: o.items ?? (o.cartItems?.length ?? 1),
+  };
+}
+
 export function FarmerOrders({ profile }: { profile?: any }) {
   const [tab, setTab] = useState<Tab>('new');
   const [dispatched, setDispatched] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [allOrders, setAllOrders] = useState<typeof demoOrders>([]);
+  const [rawOrders, setRawOrders] = useState<any[]>([]);
 
-  const isNewUser = !profile || !profile.isDemo;   // ← FIXED
+  const isNewUser = !profile || !profile.isDemo;
 
   useEffect(() => {
     const uid = auth.currentUser?.uid;
     if (uid && isNewUser) {
-      // Real user — subscribe to Firestore orders
       const unsub = subscribeToFarmerOrders(uid, (liveOrders) => {
-        setAllOrders(liveOrders);
+        setRawOrders(liveOrders);
       });
       return () => unsub();
     } else {
-      // Guest / demo — show demo data
-      setAllOrders(demoOrders);
+      setRawOrders(demoOrders);
     }
   }, [profile, isNewUser]);
+
+  const allOrders = rawOrders.map(normalizeOrder);
 
   // Show empty state for real users with no orders
   if (isNewUser && allOrders.length === 0) {
@@ -72,8 +97,13 @@ export function FarmerOrders({ profile }: { profile?: any }) {
 
   const totalValue = filtered.reduce((a, b) => a + b.amount, 0);
 
-  const handleDispatch = (id: string) => {
+  const handleDispatch = async (id: string) => {
     setDispatched(prev => new Set(prev).add(id));
+    try {
+      await updateOrderStatus(id, 'dispatched');
+    } catch (err) {
+      console.error('Failed to update order status:', err);
+    }
   };
 
   return (
