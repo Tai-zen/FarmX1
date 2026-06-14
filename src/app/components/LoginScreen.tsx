@@ -132,22 +132,26 @@ export function LoginScreen({ onLogin }: Props) {
         let profile = await getUserProfile(user.uid);
         const determinedRole = resolveRole(user.email, profile?.role, selectedRole);
 
-        // Promote to admin in Firestore if not already
+        // Promote to admin in Firestore if not already (non-blocking — rules may lag)
         if (determinedRole === 'admin' && profile?.role !== 'admin') {
-          await createOrUpdateUserProfile(user.uid, {
-            fullName: profile?.fullName || user.displayName || 'Admin',
-            email: user.email || '',
-            role: 'admin',
-          });
-          profile = { ...profile, role: 'admin' };
+          try {
+            await createOrUpdateUserProfile(user.uid, {
+              fullName: profile?.fullName || user.displayName || 'Admin',
+              email: user.email || '',
+              role: 'admin',
+            });
+          } catch {
+            // Firestore rules may not yet allow admin role write — login still proceeds
+          }
+          profile = { ...(profile || {}), role: 'admin', email: user.email, fullName: profile?.fullName || 'Admin' };
         }
 
-        // Log action in audit trail
-        await logUserAction('AUTHENTICATION_LOGIN', 'User logged in via email credentials', {
+        // Log action in audit trail (non-blocking)
+        logUserAction('AUTHENTICATION_LOGIN', 'User logged in via email credentials', {
           uid: user.uid,
           email: user.email,
           role: determinedRole
-        });
+        }).catch(() => {});
 
         onLogin(determinedRole, profile);
       } catch (err: any) {
@@ -210,20 +214,24 @@ export function LoginScreen({ onLogin }: Props) {
           role: resolvedRole,
         });
       } else if (resolvedRole === 'admin' && profile.role !== 'admin') {
-        await createOrUpdateUserProfile(user.uid, {
-          fullName: profile.fullName,
-          email: profile.email,
-          role: 'admin',
-        });
+        try {
+          await createOrUpdateUserProfile(user.uid, {
+            fullName: profile.fullName,
+            email: profile.email || '',
+            role: 'admin',
+          });
+        } catch {
+          // Firestore rules may not yet allow admin role write — login still proceeds
+        }
         profile = { ...profile, role: 'admin' };
       } else {
         userRole = resolvedRole;
       }
 
-      await logUserAction('AUTHENTICATION_GOOGLE_LOGIN', 'User authenticated via Google Account', {
+      logUserAction('AUTHENTICATION_GOOGLE_LOGIN', 'User authenticated via Google Account', {
         uid: user.uid,
         email: user.email
-      });
+      }).catch(() => {});
 
       onLogin(resolvedRole, profile);
     } catch (err: any) {

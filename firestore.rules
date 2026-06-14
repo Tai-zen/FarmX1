@@ -21,10 +21,18 @@ service cloud.firestore {
       allow read: if isSignedIn();
 
       allow create: if isOwner(uid)
-        && request.resource.data.role in ['farmer', 'consumer'];
+        && (
+          request.resource.data.role in ['farmer', 'consumer']
+          || (request.resource.data.role == 'admin'
+              && request.auth.token.email == 'taye.ojo08@gmail.com')
+        );
 
       allow update: if isOwner(uid)
-        && request.resource.data.role in ['farmer', 'consumer'];
+        && (
+          request.resource.data.role in ['farmer', 'consumer']
+          || (request.resource.data.role == 'admin'
+              && request.auth.token.email == 'taye.ojo08@gmail.com')
+        );
 
       allow delete: if false;
 
