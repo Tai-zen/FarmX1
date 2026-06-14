@@ -10,6 +10,13 @@ import {
 } from 'firebase/auth';
 import { auth, createOrUpdateUserProfile, getUserProfile, logUserAction } from '../firebase';
 
+const ADMIN_EMAILS = ['taye.ojo08@gmail.com'];
+
+function resolveRole(email: string | null | undefined, profileRole: string | undefined, fallback: UserRole): UserRole {
+  if (email && ADMIN_EMAILS.includes(email.toLowerCase())) return 'admin';
+  return (profileRole as UserRole) || fallback;
+}
+
 interface Props {
   onLogin: (role: UserRole, profile?: any) => void;
 }
@@ -122,8 +129,18 @@ export function LoginScreen({ onLogin }: Props) {
         const user = userCredential.user;
 
         // Fetch saved role from database
-        const profile = await getUserProfile(user.uid);
-        const determinedRole = (profile && profile.role as UserRole) || selectedRole;
+        let profile = await getUserProfile(user.uid);
+        const determinedRole = resolveRole(user.email, profile?.role, selectedRole);
+
+        // Promote to admin in Firestore if not already
+        if (determinedRole === 'admin' && profile?.role !== 'admin') {
+          await createOrUpdateUserProfile(user.uid, {
+            fullName: profile?.fullName || user.displayName || 'Admin',
+            email: user.email || '',
+            role: 'admin',
+          });
+          profile = { ...profile, role: 'admin' };
+        }
 
         // Log action in audit trail
         await logUserAction('AUTHENTICATION_LOGIN', 'User logged in via email credentials', {
@@ -179,20 +196,28 @@ export function LoginScreen({ onLogin }: Props) {
       let profile = await getUserProfile(user.uid);
       let userRole: UserRole = 'consumer';
 
+      const resolvedRole = resolveRole(user.email, profile?.role, 'consumer');
+
       if (!profile) {
-        // Create a default consumer profile if it's new
         profile = {
           fullName: user.displayName || 'Google User',
           email: user.email || '',
-          role: 'consumer'
+          role: resolvedRole,
         };
         await createOrUpdateUserProfile(user.uid, {
           fullName: profile.fullName,
           email: profile.email,
-          role: 'consumer'
+          role: resolvedRole,
         });
+      } else if (resolvedRole === 'admin' && profile.role !== 'admin') {
+        await createOrUpdateUserProfile(user.uid, {
+          fullName: profile.fullName,
+          email: profile.email,
+          role: 'admin',
+        });
+        profile = { ...profile, role: 'admin' };
       } else {
-        userRole = profile.role as UserRole;
+        userRole = resolvedRole;
       }
 
       await logUserAction('AUTHENTICATION_GOOGLE_LOGIN', 'User authenticated via Google Account', {
@@ -200,7 +225,7 @@ export function LoginScreen({ onLogin }: Props) {
         email: user.email
       });
 
-      onLogin(userRole, profile);
+      onLogin(resolvedRole, profile);
     } catch (err: any) {
       console.warn('Google sign-in popup error/fallback:', err);
       // Fallback for iframe sandboxing context

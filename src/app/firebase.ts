@@ -54,7 +54,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export async function createOrUpdateUserProfile(uid: string, profileData: {
   fullName: string;
   email: string;
-  role: 'farmer' | 'consumer';
+  role: 'farmer' | 'consumer' | 'admin';
   phone?: string;
   farmName?: string;
   farmState?: string;

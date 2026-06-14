@@ -18,6 +18,7 @@ import { AddListing } from './components/AddListing';
 import { AdminDashboard } from './components/AdminDashboard';
 import { ProfileSettings } from './components/ProfileSettings';
 import { AIChatWidget } from './components/AIChatWidget';
+import { NotificationBell } from './components/NotificationBell';
 import { UserRole, Screen } from './components/types';
 import { LogOut } from 'lucide-react';
 import { auth, getUserProfile, subscribeToCart } from './firebase';
@@ -104,6 +105,7 @@ export default function App() {
               style={{ fontSize: 10, background: role === 'farmer' ? '#EAF3DE' : role === 'admin' ? '#F3E8FF' : '#E6F1FB', color: role === 'farmer' ? '#27500A' : role === 'admin' ? '#6B21A8' : '#185FA5' }}>
               {role === 'farmer' ? '🌾 Farmer' : role === 'admin' ? '🛡 Admin' : '🛒 Consumer'}
             </span>
+            <NotificationBell role={role} onNavigate={navigate} />
             <button onClick={() => setShowLogoutConfirm(true)} aria-label="Log out">
               <LogOut size={16} style={{ color: '#5F5E5A' }} />
             </button>
@@ -117,6 +119,7 @@ export default function App() {
             style={{ fontSize: 11, background: role === 'farmer' ? '#EAF3DE' : role === 'admin' ? '#F3E8FF' : '#E6F1FB', color: role === 'farmer' ? '#27500A' : role === 'admin' ? '#6B21A8' : '#185FA5' }}>
             {role === 'farmer' ? '🌾 Farmer mode' : role === 'admin' ? '🛡 Admin mode' : '🛒 Consumer mode'}
           </span>
+          <NotificationBell role={role} onNavigate={navigate} />
           <button onClick={() => setShowLogoutConfirm(true)} className="flex items-center gap-1.5"
             style={{ fontSize: 12, color: '#5F5E5A' }} aria-label="Log out">
             <LogOut size={13} /> Log out
