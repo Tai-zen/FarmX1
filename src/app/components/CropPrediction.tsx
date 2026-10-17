@@ -424,24 +424,11 @@ export function CropPrediction({ onNavigate, profile, initialCropName }: Props) 
 
   async function reverseGeocodeMock(coords: { lat: number, lng: number }) {
     try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lng}&format=json`,
-        { headers: { 'User-Agent': 'FarmX/1.0 (contact@farmx.ng)' } }
-      );
-      const data = await res.json();
-      if (data && data.address) {
-        const { village, town, city, suburb, state } = data.address;
-        const localArea = village || town || city || suburb || 'Kaduna Region';
-        const display = `${localArea}, ${state || 'Kaduna State'}`;
-        setLocationLabel(display);
-        setSearchInput(display);
-      } else {
-        const fallback = `Point: ${coords.lat.toFixed(4)}°N, ${coords.lng.toFixed(4)}°E (Kaduna)`;
-        setLocationLabel(fallback);
-        setSearchInput(fallback);
-      }
+      const display = await reverseGeocode(coords);
+      setLocationLabel(display);
+      setSearchInput(display);
     } catch {
-      const fallback = `Point: ${coords.lat.toFixed(4)}°N, ${coords.lng.toFixed(4)}°E (Kaduna)`;
+      const fallback = `Point: ${coords.lat.toFixed(4)}°N, ${coords.lng.toFixed(4)}°E`;
       setLocationLabel(fallback);
       setSearchInput(fallback);
     }
