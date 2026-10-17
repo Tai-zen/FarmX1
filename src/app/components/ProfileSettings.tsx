@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { User, Phone, MapPin, Wheat, Save, CheckCircle, ArrowLeft } from 'lucide-react';
+import { User, Phone, MapPin, Wheat, Save, CheckCircle, ArrowLeft, Building2 } from 'lucide-react';
 import { Screen } from './types';
 import { createOrUpdateUserProfile, auth, logUserAction } from '../firebase';
+import { NIGERIAN_BANKS } from './WalletScreen';
 
 const NIGERIAN_STATES = [
   'Abia','Adamawa','Akwa Ibom','Anambra','Bauchi','Bayelsa','Benue','Borno',
@@ -27,6 +28,11 @@ export function ProfileSettings({ onNavigate, profile, onProfileUpdate }: Props)
   const [farmSize, setFarmSize] = useState(profile?.farmSize || '');
   const [deliveryAddress, setDeliveryAddress] = useState(profile?.deliveryAddress || '');
 
+  // Destination account fields for farmers
+  const [bankName, setBankName] = useState(profile?.bankName || 'Guaranty Trust Bank (GTBank)');
+  const [bankAccountNumber, setBankAccountNumber] = useState(profile?.bankAccountNumber || '0023456789');
+  const [bankAccountName, setBankAccountName] = useState(profile?.bankAccountName || profile?.fullName || 'AMINU DANJUMA');
+
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +40,7 @@ export function ProfileSettings({ onNavigate, profile, onProfileUpdate }: Props)
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim()) { setError('Full name is required'); return; }
-    const uid = auth.currentUser?.uid;
-    if (!uid) { setError('Not authenticated — please log in again'); return; }
+    const uid = auth.currentUser?.uid || profile?.uid || 'guest-farmer';
 
     setSaving(true);
     setError(null);
@@ -46,11 +51,32 @@ export function ProfileSettings({ onNavigate, profile, onProfileUpdate }: Props)
         role,
         phone: phone.trim(),
         ...(role === 'farmer'
-          ? { farmName: farmName.trim(), farmState, farmSize: farmSize || '0' }
+          ? {
+              farmName: farmName.trim(),
+              farmState,
+              farmSize: farmSize || '0',
+              bankName,
+              bankAccountNumber: bankAccountNumber.replace(/\D/g, '').slice(0, 10),
+              bankAccountName: bankAccountName.trim().toUpperCase(),
+            }
           : { deliveryAddress: deliveryAddress.trim() }),
       };
-      await createOrUpdateUserProfile(uid, updated);
-      await logUserAction('PROFILE_UPDATE', 'User updated their profile in settings', { uid, role });
+
+      if (role === 'farmer') {
+        try {
+          localStorage.setItem(`farmx_destination_account_${uid}`, JSON.stringify({
+            bankName,
+            accountNumber: bankAccountNumber.replace(/\D/g, '').slice(0, 10),
+            accountName: bankAccountName.trim().toUpperCase(),
+          }));
+        } catch {}
+      }
+
+      if (auth.currentUser) {
+        await createOrUpdateUserProfile(uid, updated);
+        await logUserAction('PROFILE_UPDATE', 'User updated their profile in settings', { uid, role });
+      }
+
       const merged = { ...profile, ...updated };
       onProfileUpdate?.(merged);
       setSaved(true);
@@ -176,6 +202,51 @@ export function ProfileSettings({ onNavigate, profile, onProfileUpdate }: Props)
                   min="0" step="0.1"
                   className="w-full px-3 rounded-lg outline-none"
                   style={{ height: 38, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#FAFAF8' }} />
+              </div>
+
+              {/* Destination Account Section */}
+              <div className="pt-3 border-t border-neutral-100">
+                <div className="flex items-center gap-1.5 mb-2.5">
+                  <Building2 size={14} style={{ color: '#27500A' }} />
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#27500A' }}>Payout Destination Account</span>
+                </div>
+                <div className="space-y-2.5">
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 500, color: '#5F5E5A', display: 'block', marginBottom: 3 }}>Bank Name</label>
+                    <select
+                      value={bankName}
+                      onChange={e => setBankName(e.target.value)}
+                      className="w-full px-3 rounded-lg outline-none text-xs"
+                      style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', color: '#444441', background: '#FAFAF8' }}
+                    >
+                      {NIGERIAN_BANKS.map(b => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 500, color: '#5F5E5A', display: 'block', marginBottom: 3 }}>10-Digit NUBAN Account Number</label>
+                    <input
+                      type="text"
+                      maxLength={10}
+                      inputMode="numeric"
+                      value={bankAccountNumber}
+                      onChange={e => setBankAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                      placeholder="0023456789"
+                      className="w-full px-3 rounded-lg outline-none font-mono text-xs"
+                      style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', color: '#444441', background: '#FAFAF8' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: 11, fontWeight: 500, color: '#5F5E5A', display: 'block', marginBottom: 3 }}>Account Holder Name</label>
+                    <input
+                      type="text"
+                      value={bankAccountName}
+                      onChange={e => setBankAccountName(e.target.value)}
+                      placeholder="AMINU DANJUMA"
+                      className="w-full px-3 rounded-lg outline-none uppercase text-xs"
+                      style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', color: '#444441', background: '#FAFAF8' }}
+                    />
+                  </div>
+                </div>
               </div>
             </div>
           ) : (

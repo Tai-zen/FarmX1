@@ -6,16 +6,31 @@ import { subscribeToMarketplaceProducts, addToCart, auth } from '../firebase';
 interface Props {
   onNavigate: (s: Screen, productId?: string) => void;
   onAddToCart: () => void;
+  profile?: any;
+  initialSearch?: string;
 }
 
 const categories = ['All', 'Vegetables', 'Grains', 'Fruits', 'Spices', 'Tubers', 'Legumes'];
 const states = ['All States', 'Kaduna', 'Kano', 'Lagos', 'Plateau', 'Enugu', 'Niger', 'Oyo'];
 
-
-
-export function Marketplace({ onNavigate, onAddToCart }: Props) {
+export function Marketplace({ onNavigate, onAddToCart, profile, initialSearch }: Props) {
   const [products, setProducts] = useState<any[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
+
+  const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('All');
+
+  useEffect(() => {
+    if (initialSearch) {
+      const matchCat = categories.find(c => c.toLowerCase() === initialSearch.toLowerCase());
+      if (matchCat) {
+        setCategory(matchCat);
+        setSearch('');
+      } else {
+        setSearch(initialSearch);
+      }
+    }
+  }, [initialSearch]);
 
   useEffect(() => {
     const unsub = subscribeToMarketplaceProducts((items) => {
@@ -43,8 +58,6 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
     });
     return () => unsub();
   }, []);
-  const [search, setSearch] = useState('');
-  const [category, setCategory] = useState('All');
   const [stateFilter, setStateFilter] = useState('All States');
   const [sort, setSort] = useState('newest');
   const [showFilters, setShowFilters] = useState(false);
@@ -78,7 +91,7 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
     setAddedIds(prev => new Set(prev).add(id));
     onAddToCart();
 
-    const uid = auth.currentUser?.uid;
+    const uid = auth.currentUser?.uid || profile?.uid || 'guest-consumer';
     const product = products.find(p => p.id === id);
     if (uid && product) {
       addToCart(uid, {
@@ -90,7 +103,7 @@ export function Marketplace({ onNavigate, onAddToCart }: Props) {
         unit: product.unit,
         emoji: product.emoji,
         image: product.image,
-      }).catch(err => console.error('Failed to add item to cart:', err));
+      }).catch(err => console.warn('Failed to add item to cart:', err));
     }
   };
 

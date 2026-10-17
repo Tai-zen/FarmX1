@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, ShoppingBag, Star, TrendingDown, Package, Heart, MapPin } from 'lucide-react';
+import { ChevronRight, ShoppingBag, Star, TrendingDown, Package, Heart, MapPin, Plus, Check } from 'lucide-react';
 import { Screen } from './types';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
-import { getRegisteredFarmers, subscribeToConsumerOrders, auth } from '../firebase';
+import { getRegisteredFarmers, subscribeToConsumerOrders, auth, addToCart } from '../firebase';
 
-interface Props { onNavigate: (s: Screen) => void; profile?: any; }
+interface Props { onNavigate: (s: Screen, param?: string) => void; profile?: any; }
 
 // Demo-only static data
 const demoRecentOrders = [
@@ -51,6 +51,7 @@ const statusStyle = (s: string) => {
 
 export function ConsumerDashboard({ onNavigate, profile }: Props) {
   const [likedRec, setLikedRec] = useState<Set<string>>(new Set());
+  const [addedRec, setAddedRec] = useState<Set<string>>(new Set());
   const [dynamicFarmers, setDynamicFarmers] = useState<any[]>([]);
 
   // ── FIX: subscribe to real consumer orders ──────────────────────────────────
@@ -60,7 +61,7 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
   const isDemo = profile?.isDemo === true;
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
+    const uid = auth.currentUser?.uid || profile?.uid;
     if (!uid || isDemo) {
       setOrdersLoading(false);
       return;
@@ -70,7 +71,7 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
       setOrdersLoading(false);
     });
     return () => unsub();
-  }, [isDemo]);
+  }, [profile, isDemo]);
   // ───────────────────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -196,26 +197,34 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
       {/* Metric cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-5">
         {[
-          { label: 'Spent this month', value: spentValue, sub: spentSub, color: '#0C447C', bg: '#E6F1FB' },
-          { label: 'Orders this month', value: monthOrdersValue, sub: monthOrdersSub, color: '#27500A', bg: '#EAF3DE' },
-          { label: 'Total orders (all)', value: totalOrdersValue, sub: totalOrdersSub, color: '#5F5E5A', bg: '#F1EFE8' },
-          { label: 'Saved farmers', value: savedFarmersValue, sub: savedFarmersSub, color: '#854F0B', bg: '#FAEEDA' },
+          { label: 'Spent this month', value: spentValue, sub: spentSub, color: '#0C447C', bg: '#E6F1FB', screen: 'order-tracking' as Screen },
+          { label: 'Orders this month', value: monthOrdersValue, sub: monthOrdersSub, color: '#27500A', bg: '#EAF3DE', screen: 'order-tracking' as Screen },
+          { label: 'Total orders (all)', value: totalOrdersValue, sub: totalOrdersSub, color: '#5F5E5A', bg: '#F1EFE8', screen: 'order-tracking' as Screen },
+          { label: 'Saved farmers', value: savedFarmersValue, sub: savedFarmersSub, color: '#854F0B', bg: '#FAEEDA', screen: 'marketplace' as Screen },
         ].map(c => (
-          <div key={c.label} className="rounded-xl p-4" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center mb-2" style={{ background: c.bg }}>
+          <button
+            key={c.label}
+            onClick={() => onNavigate(c.screen)}
+            className="rounded-xl p-4 text-left transition-all hover:shadow-xs hover:border-gray-300 cursor-pointer active:scale-[0.99] group"
+            style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}
+          >
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center mb-2 group-hover:scale-110 transition-transform" style={{ background: c.bg }}>
               <ShoppingBag size={14} style={{ color: c.color }} aria-hidden="true" />
             </div>
             <p style={{ fontSize: 10, color: '#5F5E5A', marginBottom: 1 }}>{c.label}</p>
             <p style={{ fontSize: 20, fontWeight: 500, color: '#444441' }}>{c.value}</p>
             <p style={{ fontSize: 10, color: c.color, marginTop: 1 }}>{c.sub}</p>
-          </div>
+          </button>
         ))}
       </div>
 
       {/* In-transit banner (real users with active orders) */}
       {showTransitBanner && (
-        <div className="rounded-xl p-4 mb-5 flex items-center justify-between"
-          style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.25)' }}>
+        <div
+          onClick={() => onNavigate('order-tracking')}
+          className="rounded-xl p-4 mb-5 flex items-center justify-between cursor-pointer hover:bg-blue-100/70 transition-colors"
+          style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.25)' }}
+        >
           <div className="flex items-center gap-3">
             <Package size={20} style={{ color: '#185FA5' }} />
             <div>
@@ -223,7 +232,7 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
               <p style={{ fontSize: 11, color: '#185FA5' }}>Track real-time status of your deliveries</p>
             </div>
           </div>
-          <button onClick={() => onNavigate('order-tracking')}
+          <button onClick={(e) => { e.stopPropagation(); onNavigate('order-tracking'); }}
             style={{ fontSize: 12, color: '#185FA5', fontWeight: 500 }}
             className="flex items-center gap-0.5">
             Track <ChevronRight size={13} />
@@ -234,7 +243,10 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
       <div className="grid lg:grid-cols-3 gap-5">
         {/* Spend donut */}
         <div className="rounded-xl p-4" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
-          <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441', marginBottom: 2 }}>Spend by category</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Spend by category</h2>
+            <button onClick={() => onNavigate('marketplace')} style={{ fontSize: 11, color: '#185FA5' }}>Filter market →</button>
+          </div>
           <p style={{ fontSize: 11, color: '#5F5E5A', marginBottom: 4 }}>All time · ₦{displayTotalSpend.toLocaleString()} total</p>
           <ResponsiveContainer width="100%" height={130}>
             <PieChart>
@@ -247,16 +259,22 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
           {displayTotalSpend === 0 ? (
             <p style={{ fontSize: 11, color: '#5F5E5A', textAlign: 'center', marginTop: 8 }}>No spending data yet</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-1.5 mt-2">
               {activeSpendData.map(d => (
-                <div key={d.name} className="flex items-center justify-between">
+                <div
+                  key={d.name}
+                  onClick={() => onNavigate('marketplace', d.name)}
+                  className="flex items-center justify-between p-1 rounded-lg hover:bg-neutral-50 cursor-pointer transition-colors group"
+                  title={`Filter marketplace for ${d.name}`}
+                >
                   <div className="flex items-center gap-2">
                     <div className="w-2 h-2 rounded-full" style={{ background: d.color }} aria-hidden="true" />
-                    <span style={{ fontSize: 11, color: '#5F5E5A' }}>{d.name}</span>
+                    <span style={{ fontSize: 11, color: '#5F5E5A' }} className="group-hover:text-blue-700">{d.name}</span>
                   </div>
-                  <div className="text-right">
+                  <div className="text-right flex items-center gap-1">
                     <span style={{ fontSize: 11, color: '#444441', fontWeight: 500 }}>₦{d.value.toLocaleString()}</span>
                     <span style={{ fontSize: 10, color: '#5F5E5A' }}> · {displayTotalSpend > 0 ? Math.round(d.value / displayTotalSpend * 100) : 0}%</span>
+                    <ChevronRight size={10} className="text-gray-300 group-hover:text-blue-600 transition-colors" />
                   </div>
                 </div>
               ))}
@@ -290,7 +308,7 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
               View all <ChevronRight size={12} />
             </button>
           </div>
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             {ordersLoading ? (
               <div className="py-8 text-center text-xs text-gray-400">Loading orders…</div>
             ) : listOrders.length === 0 ? (
@@ -301,15 +319,21 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
               listOrders.map(o => {
                 const s = statusStyle(o.status);
                 return (
-                  <div key={o.id} className="flex items-center gap-2.5">
+                  <div
+                    key={o.id}
+                    onClick={() => onNavigate('order-tracking')}
+                    className="flex items-center gap-2.5 p-2 rounded-xl hover:bg-neutral-50 cursor-pointer transition-colors group"
+                    title="Click to track order"
+                  >
                     <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: '#F7F6F2', fontSize: 18 }}>
                       {o.emoji}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p style={{ fontSize: 11, fontWeight: 500, color: '#444441', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product}</p>
+                      <p style={{ fontSize: 11, fontWeight: 500, color: '#444441', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} className="group-hover:text-blue-700">{o.product}</p>
                       <p style={{ fontSize: 10, color: '#5F5E5A' }}>{o.farmer} · {o.date}</p>
                     </div>
                     <span className="rounded-full px-1.5 py-0.5 flex-shrink-0" style={{ fontSize: 9, background: s.bg, color: s.color }}>{s.label}</span>
+                    <ChevronRight size={12} className="text-gray-300 group-hover:text-blue-600 transition-colors shrink-0" />
                   </div>
                 );
               })
@@ -326,16 +350,46 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
         </div>
         <div className="grid sm:grid-cols-3 gap-3">
           {recommendations.map(r => (
-            <div key={r.name} onClick={() => onNavigate('marketplace')}
-              className="rounded-xl p-3 cursor-pointer transition-all" style={{ border: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}>
+            <div
+              key={r.name}
+              onClick={() => onNavigate('marketplace', r.name)}
+              className="rounded-xl p-3 cursor-pointer transition-all hover:border-emerald-300 hover:shadow-xs group"
+              style={{ border: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}
+            >
               <div className="flex items-center justify-between mb-2">
                 <span style={{ fontSize: 28 }}>{r.emoji}</span>
-                <button onClick={e => { e.stopPropagation(); setLikedRec(p => { const n = new Set(p); n.has(r.name) ? n.delete(r.name) : n.add(r.name); return n; }); }}
-                  aria-label={`Save ${r.name}`}>
-                  <Heart size={14} style={{ color: likedRec.has(r.name) ? '#A32D2D' : '#5F5E5A', fill: likedRec.has(r.name) ? '#A32D2D' : 'none' }} />
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const uid = auth.currentUser?.uid || profile?.uid || 'guest-consumer';
+                      setAddedRec(prev => new Set(prev).add(r.name));
+                      try {
+                        await addToCart(uid, {
+                          id: `rec_${r.name.toLowerCase().replace(/\s+/g, '_')}`,
+                          name: r.name,
+                          farmerUid: '',
+                          farmerName: r.farmer,
+                          price: r.price,
+                          unit: r.unit,
+                          emoji: r.emoji,
+                        });
+                      } catch (err) {
+                        console.warn('Failed to add recommendation to cart:', err);
+                      }
+                    }}
+                    title="Quick Add to Cart"
+                    className="p-1.5 rounded-lg bg-white border border-gray-200 hover:bg-emerald-50 hover:text-emerald-800 text-gray-600 transition-all active:scale-90"
+                  >
+                    {addedRec.has(r.name) ? <Check size={12} className="text-emerald-700" /> : <Plus size={12} />}
+                  </button>
+                  <button onClick={e => { e.stopPropagation(); setLikedRec(p => { const n = new Set(p); n.has(r.name) ? n.delete(r.name) : n.add(r.name); return n; }); }}
+                    aria-label={`Save ${r.name}`}>
+                    <Heart size={14} style={{ color: likedRec.has(r.name) ? '#A32D2D' : '#5F5E5A', fill: likedRec.has(r.name) ? '#A32D2D' : 'none' }} />
+                  </button>
+                </div>
               </div>
-              <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{r.name}</p>
+              <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }} className="group-hover:text-blue-700">{r.name}</p>
               <p style={{ fontSize: 10, color: '#5F5E5A' }}>{r.farmer}</p>
               <div className="flex items-center justify-between mt-2">
                 <span style={{ fontSize: 13, fontWeight: 500, color: '#185FA5' }}>₦{r.price.toLocaleString()}<span style={{ fontSize: 10, fontWeight: 400, color: '#5F5E5A' }}>/{r.unit}</span></span>
@@ -350,19 +404,22 @@ export function ConsumerDashboard({ onNavigate, profile }: Props) {
       <div className="rounded-xl p-4 mt-5" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
         <div className="flex items-center justify-between mb-3">
           <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Saved farmers</h2>
+          <button onClick={() => onNavigate('marketplace')} style={{ fontSize: 11, color: '#185FA5' }}>Browse all farmers →</button>
         </div>
         <div className="grid sm:grid-cols-3 gap-3">
           {listFarmers.length === 0 ? (
             <div className="sm:col-span-3 py-6 text-center text-xs text-gray-400">You haven't saved any farmers yet. Browse the marketplace to connect directly!</div>
           ) : (
             listFarmers.map(f => (
-              <div key={f.name} onClick={() => onNavigate('marketplace')}
-                className="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all"
-                style={{ border: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}>
-                <div className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
+              <div key={f.name} onClick={() => onNavigate('marketplace', f.name)}
+                className="flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all hover:border-emerald-300 hover:shadow-xs group"
+                style={{ border: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}
+                title={`Find produce from ${f.name}`}
+              >
+                <div className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0 group-hover:scale-105 transition-transform"
                   style={{ background: f.color, fontSize: 12, fontWeight: 500 }}>{f.initials}</div>
                 <div className="min-w-0">
-                  <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{f.name}</p>
+                  <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }} className="group-hover:text-blue-700">{f.name}</p>
                   <div className="flex items-center gap-1">
                     <MapPin size={9} style={{ color: '#5F5E5A' }} />
                     <p style={{ fontSize: 10, color: '#5F5E5A' }}>{f.farm} · {f.location}</p>

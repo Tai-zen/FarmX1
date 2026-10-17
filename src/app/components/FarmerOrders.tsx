@@ -47,7 +47,7 @@ function normalizeOrder(o: any) {
   };
 }
 
-export function FarmerOrders({ profile }: { profile?: any }) {
+export function FarmerOrders({ profile, onNavigate }: { profile?: any; onNavigate?: (s: any) => void; }) {
   const [tab, setTab] = useState<Tab>('new');
   const [dispatched, setDispatched] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -57,7 +57,7 @@ export function FarmerOrders({ profile }: { profile?: any }) {
   const isNewUser = !profile || !profile.isDemo;
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
+    const uid = auth.currentUser?.uid || profile?.uid;
     if (uid && isNewUser) {
       const unsub = subscribeToFarmerOrders(uid, (liveOrders) => {
         setRawOrders(liveOrders);
@@ -78,9 +78,18 @@ export function FarmerOrders({ profile }: { profile?: any }) {
           📦
         </div>
         <h1 style={{ fontSize: 22, fontWeight: 500, color: '#27500A', marginBottom: 8 }}>No orders yet</h1>
-        <p style={{ fontSize: 13, color: '#5F5E5A', marginBottom: 24, lineHeight: 1.6 }} className="max-w-md mx-auto">
+        <p style={{ fontSize: 13, color: '#5F5E5A', marginBottom: 20, lineHeight: 1.6 }} className="max-w-md mx-auto">
           When consumers purchase your products, their orders will appear here. Start by adding listings to your catalog.
         </p>
+        {onNavigate && (
+          <button
+            onClick={() => onNavigate('add-listing')}
+            className="px-5 py-2.5 rounded-lg text-white font-medium text-xs cursor-pointer shadow-sm active:scale-95 transition-all"
+            style={{ background: '#27500A' }}
+          >
+            + Add Product Listing
+          </button>
+        )}
       </div>
     );
   }

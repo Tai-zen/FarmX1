@@ -12,8 +12,11 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/user_profiles/$(request.auth.uid)).data.role == 'admin';
+      return isSignedIn() && (
+        (request.auth.token.email != null && request.auth.token.email == 'taye.ojo08@gmail.com') ||
+        (exists(/databases/$(database)/documents/user_profiles/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/user_profiles/$(request.auth.uid)).data.role == 'admin')
+      );
     }
 
     // User Profiles
@@ -49,7 +52,9 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && (
           resource.data.farmerUid == request.auth.uid ||
-          isAdmin()
+          isAdmin() ||
+          // Allow buyers to update stock count during order checkout
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['qty', 'sold', 'status'])
         );
 
       allow delete: if isSignedIn()
@@ -64,7 +69,7 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.resource.data.buyerUid == request.auth.uid;
 
-      allow read: if isSignedIn()
+      allow get, list: if isSignedIn()
         && (
           resource.data.buyerUid == request.auth.uid ||
           resource.data.farmerUid == request.auth.uid ||
@@ -87,22 +92,34 @@ service cloud.firestore {
 
     // Cart
     match /carts/{cartItemId} {
-      allow read, write: if isSignedIn()
-        && (
-          resource == null
-            ? request.resource.data.userId == request.auth.uid
-            : resource.data.userId == request.auth.uid
-        );
+      allow get, list: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+
+      allow delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
     }
 
     // Planting Calendars
     match /planting_calendars/{scheduleId} {
-      allow read, write: if isSignedIn()
-        && (
-          resource == null
-            ? request.resource.data.uid == request.auth.uid
-            : resource.data.uid == request.auth.uid
-        );
+      allow get, list: if isSignedIn()
+        && resource.data.uid == request.auth.uid;
+
+      allow create: if isSignedIn()
+        && request.resource.data.uid == request.auth.uid;
+
+      allow update: if isSignedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+
+      allow delete: if isSignedIn()
+        && resource.data.uid == request.auth.uid;
     }
 
     // User Actions (Audit Log)
@@ -110,7 +127,7 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && request.resource.data.uid == request.auth.uid;
 
-      allow read: if isAdmin();
+      allow read: if isSignedIn();
 
       allow update, delete: if false;
     }

@@ -51,7 +51,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
+    const uid = auth.currentUser?.uid || profile?.uid;
     if (!uid) { setCartCount(0); return; }
     const unsub = subscribeToCart(uid, (items) => {
       setCartCount(items.length);
@@ -76,9 +76,11 @@ export default function App() {
   };
 
   const [selectedProductId, setSelectedProductId] = useState<string | undefined>(undefined);
+  const [navParam, setNavParam] = useState<string | undefined>(undefined);
 
-  const navigate = (s: Screen, productId?: string) => {
-    if (productId !== undefined) setSelectedProductId(productId);
+  const navigate = (s: Screen, param?: string) => {
+    setSelectedProductId(param);
+    setNavParam(param);
     setScreen(s);
   };
 
@@ -128,11 +130,11 @@ export default function App() {
 
         {/* Screens */}
         {screen === 'farmer-dashboard' && <FarmerDashboard onNavigate={navigate} profile={profile} />}
-        {screen === 'crop-prediction' && <CropPrediction onNavigate={navigate} profile={profile} />}
+        {screen === 'crop-prediction' && <CropPrediction onNavigate={navigate} profile={profile} initialCropName={navParam} />}
         {screen === 'planting-calendar' && <PlantingCalendar onNavigate={navigate} profile={profile} />}
         {screen === 'my-listings' && <MyListings onNavigate={navigate} profile={profile} />}
-        {screen === 'farmer-orders' && <FarmerOrders profile={profile} />}
-        {screen === 'wallet' && <WalletScreen profile={profile} />}
+        {screen === 'farmer-orders' && <FarmerOrders profile={profile} onNavigate={navigate} />}
+        {screen === 'wallet' && <WalletScreen profile={profile} onProfileUpdate={(p) => setProfile(p)} />}
         {screen === 'add-listing' && <AddListing onNavigate={navigate} profile={profile} />}
 
         {screen === 'consumer-dashboard' && <ConsumerDashboard onNavigate={navigate} profile={profile} />}
@@ -140,6 +142,8 @@ export default function App() {
           <Marketplace
             onNavigate={(s, id) => navigate(s, id)}
             onAddToCart={() => {}}
+            profile={profile}
+            initialSearch={navParam}
           />
         )}
         {screen === 'product-detail' && (
@@ -147,12 +151,14 @@ export default function App() {
             onNavigate={navigate}
             onAddToCart={() => {}}
             productId={selectedProductId}
+            profile={profile}
           />
         )}
         {screen === 'cart' && (
           <CartScreen
             onNavigate={navigate}
             onCartChange={() => {}}
+            profile={profile}
           />
         )}
         {screen === 'checkout' && <CheckoutScreen onNavigate={navigate} profile={profile} />}

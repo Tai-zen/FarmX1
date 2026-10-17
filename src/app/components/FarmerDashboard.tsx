@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Wallet, ClipboardList, TrendingUp, Sprout, ChevronRight,
   Bell, Sun, CloudRain, Wind, CheckCircle2, Circle, AlertCircle
@@ -6,17 +6,9 @@ import {
 import { Screen } from './types';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, CartesianGrid } from 'recharts';
 import { subscribeToPlantingSchedules, subscribeToFarmerOrders, auth } from '../firebase';
+import { get6MonthsFromCurrent } from './WalletScreen';
 
-interface Props { onNavigate: (s: Screen) => void; profile?: any; }
-
-const salesData = [
-  { month: 'Jan', revenue: 92000, orders: 18 },
-  { month: 'Feb', revenue: 142000, orders: 24 },
-  { month: 'Mar', revenue: 198000, orders: 31 },
-  { month: 'Apr', revenue: 165000, orders: 27 },
-  { month: 'May', revenue: 231000, orders: 38 },
-  { month: 'Jun', revenue: 287000, orders: 44 },
-];
+interface Props { onNavigate: (s: Screen, param?: string) => void; profile?: any; }
 
 const recentOrders = [
   { id: 'ORD-8821', buyer: 'Fatima Bello', location: 'Abuja FCT', product: 'Roma Tomatoes × 20kg', amount: 14000, status: 'new', time: '2h ago', avatar: 'FB', color: '#185FA5' },
@@ -25,20 +17,24 @@ const recentOrders = [
   { id: 'ORD-8818', buyer: 'Tunde Akande', location: 'Ibadan', product: 'Maize × 100kg', amount: 35000, status: 'delivered', time: 'Yesterday', avatar: 'TA', color: '#27500A' },
 ];
 
-const tasks = [
-  { task: 'Apply top-dress fertiliser', phase: 'Post-planting', date: 'Today', status: 'today', done: false },
-  { task: 'Check irrigation system', phase: 'Pre-planting', date: 'Tomorrow', status: 'tomorrow', done: false },
-  { task: 'Weed control — rows 1–4', phase: 'Post-planting', date: '8 Jun', status: 'upcoming', done: false },
-  { task: 'Sow seeds — section B', phase: 'Planting', date: '10 Jun', status: 'upcoming', done: false },
-  { task: 'Soil testing', phase: 'Pre-planting', date: '12 Jun', status: 'upcoming', done: false },
-];
+import { NIGERIA_CROPS } from '../data/nigeriaCrops';
+import { generateCropTasks } from './PlantingCalendar';
 
-const cropSuggestions = [
-  { name: 'Roma Tomatoes', match: 94, harvest: 'Aug 2026', emoji: '🍅', best: true, trend: '+2%' },
-  { name: 'Pepper (Tatashe)', match: 88, harvest: 'Sep 2026', emoji: '🌶️', best: false, trend: '+1%' },
-  { name: 'Onion', match: 81, harvest: 'Oct 2026', emoji: '🧅', best: false, trend: '−' },
-  { name: 'Maize', match: 76, harvest: 'Sep 2026', emoji: '🌽', best: false, trend: '−' },
-];
+// Dynamically generate in-season crop recommendations for the current month
+function getInSeasonSuggestions() {
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1;
+  const inSeason = NIGERIA_CROPS.filter(c => c.plantingMonths.includes(currentMonth));
+  const pool = inSeason.length > 0 ? inSeason : NIGERIA_CROPS;
+  return pool.slice(0, 4).map((c, i) => ({
+    name: c.name,
+    match: 96 - i * 3,
+    emoji: c.emoji,
+    best: i === 0,
+    category: c.category,
+    daysToMaturity: c.daysToMaturity
+  }));
+}
 
 const notifications = [
   { type: 'order', msg: 'New order from Fatima Bello — ₦14,000', time: '2h ago', read: false },
@@ -70,6 +66,7 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
   const [doneTasks, setDoneTasks] = useState<Set<number>>(new Set());
   const [showNotifs, setShowNotifs] = useState(false);
   const [chartMode, setChartMode] = useState<'revenue' | 'orders'>('revenue');
+  const [sixMonthView, setSixMonthView] = useState<'past' | 'projected'>('past');
 
   const isNewUser = !profile || !profile.isDemo;
 
@@ -124,18 +121,56 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
   const salesSub = isNewUser
     ? (liveRevenue > 0 ? `${deliveredOrders.length} orders completed` : 'No sales yet')
     : '↑ +24% vs last month';
-  const totalRevenueText = isNewUser ? `₦${liveRevenue.toLocaleString()}` : '₦1,115,000';
-  const totalOrdersText = isNewUser ? String(liveOrders.length) : '182';
+  const dynamicSalesData = useMemo(() => {
+    return get6MonthsFromCurrent(new Date(), sixMonthView);
+  }, [sixMonthView]);
+
+  const monthRangeText = useMemo(() => {
+    if (dynamicSalesData.length === 0) return '';
+    const first = dynamicSalesData[0];
+    const last = dynamicSalesData[dynamicSalesData.length - 1];
+    return `${first.fullMonth} ${first.year} – ${last.fullMonth} ${last.year}`;
+  }, [dynamicSalesData]);
+
+  const activeSalesData = isNewUser
+    ? dynamicSalesData.map(d => ({ ...d, revenue: 0, orders: 0 }))
+    : dynamicSalesData;
+
+  const totalCalculatedRevenue = activeSalesData.reduce((acc, curr) => acc + curr.revenue, 0);
+  const totalCalculatedOrders = activeSalesData.reduce((acc, curr) => acc + curr.orders, 0);
+
+  const totalRevenueText = isNewUser ? `₦${liveRevenue.toLocaleString()}` : `₦${totalCalculatedRevenue.toLocaleString()}`;
+  const totalOrdersText = isNewUser ? String(liveOrders.length) : String(totalCalculatedOrders);
   const avgOrderValueText = isNewUser
     ? (deliveredOrders.length > 0
         ? `₦${Math.round(liveRevenue / deliveredOrders.length).toLocaleString()}`
         : '₦0')
-    : '₦6,126';
-  const activeSalesData = isNewUser
-    ? salesData.map(d => ({ ...d, revenue: 0, orders: 0 }))
-    : salesData;
+    : `₦${Math.round(totalCalculatedRevenue / (totalCalculatedOrders || 1)).toLocaleString()}`;
+
+  const cropSuggestions = getInSeasonSuggestions();
+
+  // Tasks derived from active schedule or default in-season crop, strictly starting from Day 1
+  const scheduleStartDate = activeSchedule?.startDate ? new Date(activeSchedule.startDate) : new Date();
+  const scheduleTasksRaw = generateCropTasks(
+    activeSchedule?.cropName || cropSuggestions[0]?.name || 'Roma Tomatoes',
+    activeSchedule?.daysToMaturity || cropSuggestions[0]?.daysToMaturity || 90
+  );
+
+  const listTasks = scheduleTasksRaw.slice(0, 5).map(t => {
+    const taskDate = new Date(scheduleStartDate);
+    taskDate.setDate(taskDate.getDate() + (t.day - 1));
+    const isToday = taskDate.toDateString() === new Date().toDateString();
+    const isTomorrow = new Date(Date.now() + 86400000).toDateString() === taskDate.toDateString();
+    return {
+      task: t.task,
+      phase: t.phase === 'pre' ? 'Pre-planting' : t.phase === 'planting' ? 'Planting' : 'Post-planting',
+      date: isToday ? 'Today' : isTomorrow ? 'Tomorrow' : taskDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      status: isToday ? 'today' : isTomorrow ? 'tomorrow' : 'upcoming',
+      done: false
+    };
+  });
+
   const listOrders = isNewUser ? liveOrders.slice(0, 4) : recentOrders;
-  const listTasks = activeSchedule ? tasks : (isNewUser ? [] : tasks);
   const listNotifications = isNewUser ? [] : notifications;
   const unreadCount = listNotifications.filter(n => !n.read).length;
   // ─────────────────────────────────────────────────────────────────────────
@@ -148,24 +183,36 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
     });
   };
 
+  const currentDateDisplay = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+
   return (
     <div className="p-5 lg:p-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 500, color: '#27500A' }}>Good morning, {displayName} 👋</h1>
-          <p style={{ fontSize: 13, color: '#5F5E5A' }}>Thursday, 5 June 2026 · {displayLocation}</p>
+          <h1 style={{ fontSize: 22, fontWeight: 500, color: '#27500A' }}>Good day, {displayName} 👋</h1>
+          <p style={{ fontSize: 13, color: '#5F5E5A' }}>{currentDateDisplay} · {displayLocation}</p>
         </div>
         <div className="flex items-center gap-2">
           {/* Weather pill */}
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg" style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.2)' }}>
+          <button
+            onClick={() => onNavigate('crop-prediction')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-colors cursor-pointer hover:bg-blue-100"
+            style={{ background: '#E6F1FB', border: '0.5px solid rgba(24,95,165,0.2)' }}
+            title="Inspect live farm weather and soil predictions"
+          >
             <CloudRain size={13} style={{ color: '#185FA5' }} aria-hidden="true" />
             <span style={{ fontSize: 11, color: '#185FA5' }}>Rain expected · 28°C</span>
-          </div>
+          </button>
           {/* Notification bell */}
           <div className="relative">
             <button onClick={() => setShowNotifs(!showNotifs)}
-              className="relative w-8 h-8 rounded-lg flex items-center justify-center"
+              className="relative w-8 h-8 rounded-lg flex items-center justify-center cursor-pointer hover:bg-neutral-50"
               style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}
               aria-label="Notifications">
               <Bell size={15} style={{ color: '#444441' }} />
@@ -177,15 +224,25 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
             {showNotifs && (
               <div className="absolute right-0 mt-2 rounded-xl overflow-hidden z-50"
                 style={{ width: 280, background: '#fff', border: '0.5px solid rgba(0,0,0,0.12)', boxShadow: '0 8px 24px rgba(0,0,0,0.1)' }}>
-                <div className="px-4 py-3" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
+                <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.08)' }}>
                   <p style={{ fontSize: 13, fontWeight: 500, color: '#444441' }}>Notifications</p>
+                  <span style={{ fontSize: 10, color: '#5F5E5A' }}>Real-time updates</span>
                 </div>
                 {listNotifications.length === 0 ? (
                   <div className="px-4 py-3 text-center text-xs text-gray-400">No new notifications</div>
                 ) : (
                   listNotifications.map((n, i) => (
-                    <div key={i} className="flex gap-3 px-4 py-3"
-                      style={{ background: n.read ? '#fff' : '#FAFAF8', borderBottom: '0.5px solid rgba(0,0,0,0.06)' }}>
+                    <div
+                      key={i}
+                      onClick={() => {
+                        setShowNotifs(false);
+                        if (n.type === 'order') onNavigate('farmer-orders');
+                        else if (n.type === 'wallet') onNavigate('wallet');
+                        else onNavigate('crop-prediction');
+                      }}
+                      className="flex gap-3 px-4 py-3 cursor-pointer hover:bg-neutral-50 transition-colors"
+                      style={{ background: n.read ? '#fff' : '#FAFAF8', borderBottom: '0.5px solid rgba(0,0,0,0.06)' }}
+                    >
                       <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
                         style={{ background: n.type === 'order' ? '#FAEEDA' : n.type === 'wallet' ? '#EAF3DE' : '#E6F1FB', fontSize: 12 }}>
                         {n.type === 'order' ? '📦' : n.type === 'wallet' ? '💰' : '🤖'}
@@ -233,19 +290,44 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
       <div className="grid lg:grid-cols-3 gap-5">
         {/* Revenue chart */}
         <div className="lg:col-span-2 rounded-xl p-4" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
             <div>
-              <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Performance overview</h2>
-              <p style={{ fontSize: 11, color: '#5F5E5A' }}>January – June 2026</p>
+              <div className="flex items-center gap-2">
+                <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Performance overview</h2>
+                <span className="rounded-full px-2 py-0.5 text-[10px] bg-emerald-50 text-emerald-800 font-medium border border-emerald-200">
+                  6-Month Timeline
+                </span>
+              </div>
+              <p style={{ fontSize: 11, color: '#5F5E5A', marginTop: 1 }}>{monthRangeText}</p>
             </div>
-            <div className="flex gap-1 p-1 rounded-lg" style={{ background: '#F1EFE8' }}>
-              {(['revenue', 'orders'] as const).map(m => (
-                <button key={m} onClick={() => setChartMode(m)}
-                  className="px-2.5 py-1 rounded-md"
-                  style={{ fontSize: 11, background: chartMode === m ? '#fff' : 'transparent', color: chartMode === m ? '#27500A' : '#5F5E5A', fontWeight: chartMode === m ? 500 : 400 }}>
-                  {m === 'revenue' ? 'Revenue' : 'Orders'}
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <div className="flex gap-0.5 p-0.5 rounded-lg bg-neutral-100 border border-neutral-200">
+                <button
+                  onClick={() => setSixMonthView('past')}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                    sixMonthView === 'past' ? 'bg-white text-emerald-900 shadow-xs' : 'text-neutral-500 hover:text-neutral-700'
+                  }`}
+                >
+                  Past 6 Mos
                 </button>
-              ))}
+                <button
+                  onClick={() => setSixMonthView('projected')}
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition-all ${
+                    sixMonthView === 'projected' ? 'bg-white text-emerald-900 shadow-xs' : 'text-neutral-500 hover:text-neutral-700'
+                  }`}
+                >
+                  Projected
+                </button>
+              </div>
+              <div className="flex gap-1 p-1 rounded-lg" style={{ background: '#F1EFE8' }}>
+                {(['revenue', 'orders'] as const).map(m => (
+                  <button key={m} onClick={() => setChartMode(m)}
+                    className="px-2.5 py-1 rounded-md"
+                    style={{ fontSize: 11, background: chartMode === m ? '#fff' : 'transparent', color: chartMode === m ? '#27500A' : '#5F5E5A', fontWeight: chartMode === m ? 500 : 400 }}>
+                    {m === 'revenue' ? 'Revenue' : 'Orders'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <ResponsiveContainer width="100%" height={180}>
@@ -287,9 +369,10 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
           <div className="space-y-2">
             {cropSuggestions.map((c) => (
               <div key={c.name}
-                className="flex items-center gap-2 p-2.5 rounded-xl cursor-pointer transition-all"
+                className="flex items-center gap-2 p-2.5 rounded-xl cursor-pointer transition-all hover:border-emerald-400 hover:shadow-xs"
                 style={{ border: `0.5px solid ${c.best ? '#3B6D11' : 'rgba(0,0,0,0.08)'}`, background: c.best ? '#EAF3DE' : '#F7F6F2' }}
-                onClick={() => onNavigate('crop-prediction')}
+                onClick={() => onNavigate('crop-prediction', c.name)}
+                title={`Analyze suitability for ${c.name}`}
               >
                 <span style={{ fontSize: 18, flexShrink: 0 }}>{c.emoji}</span>
                 <div className="flex-1 min-w-0">
@@ -304,10 +387,11 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
                     <span style={{ fontSize: 11, fontWeight: 500, color: '#27500A', flexShrink: 0 }}>{c.match}%</span>
                   </div>
                 </div>
+                <ChevronRight size={13} className="text-gray-300" />
               </div>
             ))}
           </div>
-          <button onClick={() => onNavigate('crop-prediction')} className="w-full mt-3 rounded-lg py-2 transition-all active:scale-[0.98]"
+          <button onClick={() => onNavigate('crop-prediction')} className="w-full mt-3 rounded-lg py-2 transition-all active:scale-[0.98] cursor-pointer"
             style={{ background: '#27500A', color: '#fff', fontSize: 12 }}>
             Generate planting calendar →
           </button>
@@ -322,7 +406,7 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
               <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>This week's tasks</h2>
               <p style={{ fontSize: 11, color: '#5F5E5A' }}>{doneTasks.size}/{listTasks.length} completed</p>
             </div>
-            <button onClick={() => onNavigate('planting-calendar')} style={{ fontSize: 11, color: '#27500A' }} className="flex items-center gap-0.5">
+            <button onClick={() => onNavigate('planting-calendar')} style={{ fontSize: 11, color: '#27500A' }} className="flex items-center gap-0.5 cursor-pointer">
               Full calendar <ChevronRight size={12} />
             </button>
           </div>
@@ -340,7 +424,7 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
                 const bs = badgeStyle(t.status);
                 return (
                   <div key={i} className="flex items-center gap-3">
-                    <button onClick={() => toggleTask(i)} aria-label={done ? 'Mark incomplete' : 'Mark complete'}>
+                    <button onClick={() => toggleTask(i)} aria-label={done ? 'Mark incomplete' : 'Mark complete'} className="cursor-pointer">
                       {done
                         ? <CheckCircle2 size={16} style={{ color: '#27500A' }} />
                         : <Circle size={16} style={{ color: '#D4E8C2' }} />}
@@ -368,7 +452,7 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
                 {isNewUser ? `${liveOrders.length} order${liveOrders.length !== 1 ? 's' : ''}` : '3 new · 2 dispatched'}
               </p>
             </div>
-            <button onClick={() => onNavigate('farmer-orders')} style={{ fontSize: 11, color: '#27500A' }} className="flex items-center gap-0.5">
+            <button onClick={() => onNavigate('farmer-orders')} style={{ fontSize: 11, color: '#27500A' }} className="flex items-center gap-0.5 cursor-pointer">
               View all <ChevronRight size={12} />
             </button>
           </div>
@@ -379,18 +463,27 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
               listOrders.map((o: any) => {
                 const s = statusStyle(o.status);
                 return (
-                  <div key={o.id} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: '#F7F6F2' }}>
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0"
+                  <div
+                    key={o.id}
+                    onClick={() => onNavigate('farmer-orders')}
+                    className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-emerald-50/70 transition-colors group"
+                    style={{ background: '#F7F6F2' }}
+                    title="Click to manage order in Orders screen"
+                  >
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0 group-hover:scale-105 transition-transform"
                       style={{ background: o.color || '#27500A', fontSize: 10, fontWeight: 500 }}>
                       {o.avatar || (o.buyerName ? o.buyerName.slice(0, 2).toUpperCase() : '??')}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>{o.buyer || o.buyerName}</p>
+                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }} className="group-hover:text-emerald-800">{o.buyer || o.buyerName}</p>
                       <p style={{ fontSize: 10, color: '#5F5E5A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.product}</p>
                     </div>
-                    <div className="text-right flex-shrink-0">
-                      <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>₦{Number(o.amount).toLocaleString()}</p>
-                      <span className="rounded-full px-2 py-0.5" style={{ fontSize: 9, background: s.background, color: s.color }}>{s.label}</span>
+                    <div className="text-right flex-shrink-0 flex items-center gap-2">
+                      <div>
+                        <p style={{ fontSize: 12, fontWeight: 500, color: '#444441' }}>₦{Number(o.amount).toLocaleString()}</p>
+                        <span className="rounded-full px-2 py-0.5" style={{ fontSize: 9, background: s.background, color: s.color }}>{s.label}</span>
+                      </div>
+                      <ChevronRight size={13} className="text-gray-300 group-hover:text-emerald-700 transition-colors" />
                     </div>
                   </div>
                 );
@@ -398,7 +491,7 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
             )}
           </div>
           <button onClick={() => onNavigate('farmer-orders')}
-            className="w-full mt-3 rounded-lg py-2 text-center"
+            className="w-full mt-3 rounded-lg py-2 text-center cursor-pointer hover:bg-neutral-50 transition-colors"
             style={{ border: '0.5px solid rgba(0,0,0,0.12)', fontSize: 12, color: '#5F5E5A' }}>
             View all {isNewUser ? liveOrders.length : 7} orders
           </button>
@@ -407,7 +500,12 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
 
       {/* Farm health summary */}
       <div className="rounded-xl p-4 mt-5" style={{ border: '0.5px solid rgba(0,0,0,0.12)', background: '#fff' }}>
-        <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441', marginBottom: 12 }}>Farm health summary</h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Farm health summary</h2>
+          <button onClick={() => onNavigate('crop-prediction')} style={{ fontSize: 11, color: '#27500A' }} className="flex items-center gap-0.5 cursor-pointer">
+            Detailed sensor telemetry <ChevronRight size={12} />
+          </button>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           {[
             { label: 'Soil moisture', value: isNewUser ? '—' : '68%', status: isNewUser ? 'info' : 'good', icon: '💧', statusText: isNewUser ? 'No data' : 'Good condition' },
@@ -415,8 +513,17 @@ export function FarmerDashboard({ onNavigate, profile }: Props) {
             { label: 'Pest risk level', value: isNewUser ? '—' : 'Low', status: isNewUser ? 'info' : 'good', icon: '🐛', statusText: isNewUser ? 'No data' : 'Good condition' },
             { label: 'Harvest readiness', value: isNewUser ? '—' : '14 weeks', status: 'info', icon: '🌾', statusText: isNewUser ? 'No crop' : 'Info' },
           ].map(h => (
-            <div key={h.label} className="rounded-xl p-3" style={{ background: '#F7F6F2', border: '0.5px solid rgba(0,0,0,0.08)' }}>
-              <span style={{ fontSize: 20 }}>{h.icon}</span>
+            <div
+              key={h.label}
+              onClick={() => onNavigate('crop-prediction')}
+              className="rounded-xl p-3 cursor-pointer hover:border-emerald-300 hover:shadow-xs transition-all group"
+              style={{ background: '#F7F6F2', border: '0.5px solid rgba(0,0,0,0.08)' }}
+              title={`Analyze ${h.label} in AI Crop Prediction`}
+            >
+              <div className="flex items-center justify-between">
+                <span style={{ fontSize: 20 }}>{h.icon}</span>
+                <ChevronRight size={12} className="text-gray-300 group-hover:text-emerald-700 transition-colors" />
+              </div>
               <p style={{ fontSize: 16, fontWeight: 500, color: '#444441', marginTop: 4 }}>{h.value}</p>
               <p style={{ fontSize: 10, color: '#5F5E5A' }}>{h.label}</p>
               <div className="mt-1.5 flex items-center gap-1">

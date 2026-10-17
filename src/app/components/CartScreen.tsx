@@ -6,6 +6,7 @@ import { auth, subscribeToCart, updateCartItemQty, removeCartItem, clearCart, Ca
 interface Props {
   onNavigate: (s: Screen) => void;
   onCartChange: (delta: number) => void;
+  profile?: any;
 }
 
 interface DisplayCartItem {
@@ -20,13 +21,14 @@ interface DisplayCartItem {
   image?: string | null;
 }
 
-export function CartScreen({ onNavigate, onCartChange }: Props) {
+export function CartScreen({ onNavigate, onCartChange, profile }: Props) {
   const [items, setItems] = useState<DisplayCartItem[]>([]);
   const [loading, setLoading] = useState(true);
   const prevCountRef = useRef<number | null>(null);
 
+  const uid = auth.currentUser?.uid || profile?.uid || 'guest-consumer';
+
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
     if (!uid) {
       setItems([]);
       setLoading(false);
@@ -92,7 +94,7 @@ export function CartScreen({ onNavigate, onCartChange }: Props) {
   };
 
   const subtotal = items.reduce((sum, i) => sum + i.price * i.qty, 0);
-  const delivery = items.length > 0 ? 2500 : 0;
+  const delivery = items.length > 0 ? 50 : 0;
   const total = subtotal + delivery;
 
   if (loading) {

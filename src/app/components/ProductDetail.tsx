@@ -7,9 +7,10 @@ interface Props {
   onNavigate: (s: Screen) => void;
   onAddToCart: () => void;
   productId?: string;
+  profile?: any;
 }
 
-export function ProductDetail({ onNavigate, onAddToCart, productId }: Props) {
+export function ProductDetail({ onNavigate, onAddToCart, productId, profile }: Props) {
   const [qty, setQty] = useState(1);
   const [added, setAdded] = useState(false);
   const [activeImg, setActiveImg] = useState(0);
@@ -51,7 +52,7 @@ export function ProductDetail({ onNavigate, onAddToCart, productId }: Props) {
     if (!product || addingToCart) return;
     setAddingToCart(true);
 
-    const uid = auth.currentUser?.uid;
+    const uid = auth.currentUser?.uid || profile?.uid || 'guest-consumer';
     if (uid) {
       try {
         // addToCart signature: (uid, { id, name, farmerUid?, farmerName?, price, unit, emoji?, image? }, qty?)

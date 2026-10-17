@@ -202,7 +202,8 @@ export async function createOrder(orderData: {
   product: string;
   amount: number;
   items?: number;
-  paymentMethod: 'card' | 'bank' | 'ussd';
+  paymentMethod: 'card' | 'bank' | 'ussd' | 'paystack';
+  paymentReference?: string;
   cartItems?: { 
     productId: string; 
     name: string;
@@ -411,6 +412,40 @@ export interface CartItemDoc {
   qty: number;
 }
 
+const CART_STORAGE_PREFIX = 'farmx_cart_';
+type CartChangeListener = (targetUid: string, items: CartItemDoc[]) => void;
+const cartListeners = new Set<CartChangeListener>();
+
+function notifyCartListeners(targetUid: string, items: CartItemDoc[]) {
+  cartListeners.forEach((listener) => {
+    try {
+      listener(targetUid, items);
+    } catch (e) {
+      console.warn('Cart listener error:', e);
+    }
+  });
+}
+
+export function getLocalCart(uid: string): CartItemDoc[] {
+  if (!uid) return [];
+  try {
+    const raw = localStorage.getItem(`${CART_STORAGE_PREFIX}${uid}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setLocalCart(uid: string, items: CartItemDoc[]) {
+  if (!uid) return;
+  try {
+    localStorage.setItem(`${CART_STORAGE_PREFIX}${uid}`, JSON.stringify(items));
+    notifyCartListeners(uid, items);
+  } catch (err) {
+    console.warn('Failed to save local cart:', err);
+  }
+}
+
 /**
  * Live-subscribes to every cart line item belonging to `uid`.
  * Returns an unsubscribe function.
@@ -419,14 +454,57 @@ export function subscribeToCart(
   uid: string,
   callback: (items: CartItemDoc[]) => void
 ) {
-  const q = query(collection(db, 'carts'), where('userId', '==', uid));
-  return onSnapshot(q, (snap) => {
-    const items = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as CartItemDoc[];
-    callback(items);
-  }, (err) => {
-    console.error('Cart subscription error:', err);
+  if (!uid) {
     callback([]);
-  });
+    return () => {};
+  }
+
+  // 1. Immediately provide cached local items
+  const initialItems = getLocalCart(uid);
+  callback(initialItems);
+
+  // 2. Set up local listener so changes within this tab/session propagate instantly
+  const localListener: CartChangeListener = (listenerUid, items) => {
+    if (listenerUid === uid) {
+      callback(items);
+    }
+  };
+  cartListeners.add(localListener);
+
+  // 3. Connect to Firestore only if an authenticated Firebase session matches uid
+  let firestoreUnsub: (() => void) | null = null;
+  const currentAuthUid = auth.currentUser?.uid;
+
+  if (currentAuthUid && currentAuthUid === uid) {
+    try {
+      const q = query(collection(db, 'carts'), where('userId', '==', uid));
+      firestoreUnsub = onSnapshot(
+        q,
+        (snap) => {
+          const items = snap.docs.map((d) => ({
+            id: d.id,
+            ...(d.data() as any),
+          })) as CartItemDoc[];
+          setLocalCart(uid, items);
+          callback(items);
+        },
+        (err) => {
+          // Gracefully fallback to local storage on permission restrictions without throwing fatal errors
+          console.warn('[Cart] Real-time Firestore sync notice (serving active local cart):', err.message);
+          callback(getLocalCart(uid));
+        }
+      );
+    } catch (err: any) {
+      console.warn('[Cart] Firestore listener initialization notice:', err?.message);
+    }
+  }
+
+  return () => {
+    cartListeners.delete(localListener);
+    if (firestoreUnsub) {
+      firestoreUnsub();
+    }
+  };
 }
 
 /**
@@ -438,7 +516,7 @@ export async function addToCart(
   product: {
     id: string;
     name: string;
-    farmerUid?: string;      // ← ADD THIS
+    farmerUid?: string;
     farmerName?: string;
     price: number;
     unit: string;
@@ -447,69 +525,125 @@ export async function addToCart(
   },
   qty: number = 1
 ) {
-  const q = query(
-    collection(db, 'carts'),
-    where('userId', '==', uid),
-    where('productId', '==', product.id)
-  );
-  try {
-    const snap = await getDocs(q);
+  if (!uid) return null;
 
-    if (!snap.empty) {
-      const existing = snap.docs[0];
-      const currentQty = (existing.data().qty as number) || 0;
-      await updateDoc(existing.ref, { qty: currentQty + qty });
-      return existing.id;
-    }
+  // 1. Update local cart first for instant UI response
+  const currentItems = getLocalCart(uid);
+  const existingIdx = currentItems.findIndex((i) => i.productId === product.id);
+  let itemId = `cart_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-    const docRef = await addDoc(collection(db, 'carts'), {
+  if (existingIdx >= 0) {
+    currentItems[existingIdx].qty += qty;
+    itemId = currentItems[existingIdx].id;
+  } else {
+    currentItems.push({
+      id: itemId,
       userId: uid,
       productId: product.id,
       name: product.name,
-      farmerUid: product.farmerUid || 'unassigned',   // ← ADD THIS LINE
+      farmerUid: product.farmerUid || 'unassigned',
       farmerName: product.farmerName || 'FarmX Farmer',
       price: product.price,
       unit: product.unit,
       emoji: product.emoji || '🌾',
       image: product.image || null,
       qty,
-      addedAt: serverTimestamp(),
     });
-    return docRef.id;
-  } catch (error) {
-    console.warn('Adding to cart failed/unconfigured:', error);
-    return null;
   }
+  setLocalCart(uid, currentItems);
+
+  // 2. Sync with Firestore if authenticated
+  if (auth.currentUser && auth.currentUser.uid === uid) {
+    try {
+      const q = query(
+        collection(db, 'carts'),
+        where('userId', '==', uid),
+        where('productId', '==', product.id)
+      );
+      const snap = await getDocs(q);
+
+      if (!snap.empty) {
+        const existing = snap.docs[0];
+        const currentQty = (existing.data().qty as number) || 0;
+        await updateDoc(existing.ref, { qty: currentQty + qty });
+        return existing.id;
+      }
+
+      const docRef = await addDoc(collection(db, 'carts'), {
+        userId: uid,
+        productId: product.id,
+        name: product.name,
+        farmerUid: product.farmerUid || 'unassigned',
+        farmerName: product.farmerName || 'FarmX Farmer',
+        price: product.price,
+        unit: product.unit,
+        emoji: product.emoji || '🌾',
+        image: product.image || null,
+        qty,
+        addedAt: serverTimestamp(),
+      });
+      return docRef.id;
+    } catch (error: any) {
+      console.warn('[Cart] Firestore write notice:', error?.message);
+    }
+  }
+
+  return itemId;
 }
 
 /** Sets the quantity for a single cart line item. */
-export async function updateCartItemQty(cartItemId: string, qty: number) {
-  try {
-    await updateDoc(doc(db, 'carts', cartItemId), { qty });
-  } catch (error) {
-    console.warn('Updating cart item quantity failed/unconfigured:', error);
+export async function updateCartItemQty(cartItemId: string, qty: number, uid?: string) {
+  const targetUid = uid || auth.currentUser?.uid;
+  if (targetUid) {
+    const items = getLocalCart(targetUid);
+    const item = items.find((i) => i.id === cartItemId);
+    if (item) {
+      item.qty = qty;
+      setLocalCart(targetUid, items);
+    }
+  }
+
+  if (auth.currentUser && !cartItemId.startsWith('cart_')) {
+    try {
+      await updateDoc(doc(db, 'carts', cartItemId), { qty });
+    } catch (error: any) {
+      console.warn('[Cart] Updating cart item remote notice:', error?.message);
+    }
   }
 }
 
 /** Removes a single line item from the cart. */
-export async function removeCartItem(cartItemId: string) {
-  try {
-    await deleteDoc(doc(db, 'carts', cartItemId));
-  } catch (error) {
-    console.warn('Removing cart item failed/unconfigured:', error);
+export async function removeCartItem(cartItemId: string, uid?: string) {
+  const targetUid = uid || auth.currentUser?.uid;
+  if (targetUid) {
+    const items = getLocalCart(targetUid).filter((i) => i.id !== cartItemId);
+    setLocalCart(targetUid, items);
+  }
+
+  if (auth.currentUser && !cartItemId.startsWith('cart_')) {
+    try {
+      await deleteDoc(doc(db, 'carts', cartItemId));
+    } catch (error: any) {
+      console.warn('[Cart] Removing cart item remote notice:', error?.message);
+    }
   }
 }
 
 /** Removes every cart line item belonging to `uid`. */
 export async function clearCart(uid: string) {
-  try {
-    const q = query(collection(db, 'carts'), where('userId', '==', uid));
-    const snap = await getDocs(q);
-    const batch = writeBatch(db);
-    snap.docs.forEach((d) => batch.delete(d.ref));
-    await batch.commit();
-  } catch (error) {
-    console.warn('Clearing cart failed/unconfigured:', error);
+  if (!uid) return;
+  setLocalCart(uid, []);
+
+  if (auth.currentUser && auth.currentUser.uid === uid) {
+    try {
+      const q = query(collection(db, 'carts'), where('userId', '==', uid));
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      snap.docs.forEach((d) => batch.delete(d.ref));
+      await batch.commit();
+    } catch (error: any) {
+      console.warn('[Cart] Clearing cart remote notice:', error?.message);
+    }
   }
 }
 

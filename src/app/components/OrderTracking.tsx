@@ -33,7 +33,7 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
   const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
-    const uid = auth.currentUser?.uid;
+    const uid = auth.currentUser?.uid || profile?.uid;
     if (!uid) {
       setLoading(false);
       return;
@@ -51,7 +51,7 @@ export function OrderTracking({ role, onNavigate, profile }: Props) {
     });
 
     return () => unsub();
-  }, [role]);
+  }, [role, profile]);
 
   const handleConfirmDelivery = async () => {
     if (!selected) return;

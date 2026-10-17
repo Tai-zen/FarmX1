@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, CloudRain, Thermometer, Wind, Droplets, CheckCircle, Loader, Info, AlertTriangle, Map as MapIcon } from 'lucide-react';
+import { MapPin, CloudRain, Thermometer, Wind, Droplets, CheckCircle, Loader, Info, AlertTriangle, Map as MapIcon, Navigation, Crosshair, Sparkles } from 'lucide-react';
 import { Screen } from './types';
 import { CropPredictionMap } from './CropPredictionMap';
-import { searchLocation } from '../services/geocoding.service';
+import { searchLocation, reverseGeocode, detectCurrentLocation } from '../services/geocoding.service';
 import { fetchLiveWeather } from '../services/weather.service';
 import { NIGERIA_CROPS } from '../data/nigeriaCrops';
 import { logUserAction, savePlantingSchedule, subscribeToMarketplaceProducts } from '../firebase';
-interface Props { onNavigate: (s: Screen) => void; profile?: any; }
+interface Props { onNavigate: (s: Screen, param?: string) => void; profile?: any; initialCropName?: string; }
 
 const farmFields = [
   { id: 'A', label: 'Field A', ha: 3.2, lat: 10.5594, lng: 7.4441, soil: 'Sandy loam', lastCrop: 'Maize (2025)' },
@@ -100,66 +100,77 @@ function getDynamicAnalysis(
   const nitrogen = pH < 6.0 ? 'Moderate' : pH > 7.0 ? 'Low' : 'Optimal';
   const drainage = soilType.includes('Clay') ? 'Poor' : soilType.includes('Sand') ? 'Excellent' : 'Good';
 
-  // June (Month 6) planting season context
-  const currentMonth = 6;
+  // Dynamic real-time month and year context for Nigerian agricultural cycle
+  const now = new Date();
+  const currentMonth = now.getMonth() + 1; // 1 (Jan) to 12 (Dec)
+  const currentYear = now.getFullYear();
+  const monthNames = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  const currentMonthName = monthNames[currentMonth - 1];
 
   // Run suitability scoring based on the NIGERIA_CROPS database
+  // Strongly prioritizes crops that grow and can be planted in the current month
   const computedCrops = NIGERIA_CROPS.map((c) => {
     let score = 0;
 
-    // 1. Zone/Ecology Compatibility (Max 35 points)
+    // 1. In-Season Planting Month window match (Max 40 points) - PRIMARY CRITERION
+    const inSeason = c.plantingMonths.includes(currentMonth);
+    if (inSeason) {
+      score += 40; // Full seasonal bonus for crops active in current month
+    } else {
+      // Penalize distance from current planting month
+      const dist = Math.min(...c.plantingMonths.map(m => {
+        const d = Math.abs(m - currentMonth);
+        return Math.min(d, 12 - d);
+      }));
+      score += Math.max(0, Math.round(20 - dist * 4));
+    }
+
+    // 2. Zone/Ecology Compatibility (Max 30 points)
     const isZoneMatch = c.zones.some(z => {
       if (z === currentZone) return true;
       if (currentZone.includes('Savanna') && z.includes('Savanna')) return true;
       if (currentZone.includes('Forest') && (z.includes('Forest') || z.includes('Derived'))) return true;
       return false;
     });
-    score += isZoneMatch ? 35 : 15;
+    score += isZoneMatch ? 30 : 12;
 
-    // 2. Annual Rainfall match (Max 25 points)
+    // 3. Annual Rainfall match (Max 15 points)
     if (annualRainfall >= c.rainfallMmMin && annualRainfall <= c.rainfallMmMax) {
-      score += 25;
+      score += 15;
     } else {
       const dist = annualRainfall < c.rainfallMmMin 
         ? c.rainfallMmMin - annualRainfall 
         : annualRainfall - c.rainfallMmMax;
-      score += Math.max(0, Math.round(25 - dist / 35));
+      score += Math.max(0, Math.round(15 - dist / 50));
     }
 
-    // 3. Current Temperature match (Max 20 points)
+    // 4. Current Temperature match (Max 10 points)
     if (tempVal >= c.tempCMin && tempVal <= c.tempCMax) {
-      score += 20;
+      score += 10;
     } else {
       const dist = tempVal < c.tempCMin ? c.tempCMin - tempVal : tempVal - c.tempCMax;
-      score += Math.max(0, Math.round(20 - dist * 2));
-    }
-
-    // 4. Planting Month window match (Max 15 points)
-    if (c.plantingMonths.includes(currentMonth)) {
-      score += 15;
-    } else {
-      const dist = Math.min(...c.plantingMonths.map(m => Math.abs(m - currentMonth)));
-      score += Math.max(0, Math.round(15 - dist * 3.5));
+      score += Math.max(0, Math.round(10 - dist * 1.5));
     }
 
     // 5. Soil chemistry match (Max 5 points)
     const pHMatch = pH >= 5.8 && pH <= 6.8;
     score += pHMatch ? 5 : 2;
 
-    const match = Math.max(55, Math.min(98, score));
+    const match = Math.max(50, Math.min(99, score));
 
-    // Calculate Dynamic Harvest Month (Planting in June + Maturity Days)
-    const harvestMonthIdx = (currentMonth - 1 + Math.round(c.daysToMaturity / 30)) % 12;
-    const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-    const harvest = `${monthNames[harvestMonthIdx]} 2026`;
+    // Calculate Dynamic Harvest Month (Planting in current month + Maturity Days)
+    const totalMonthsAhead = Math.max(1, Math.round(c.daysToMaturity / 30));
+    const harvestMonthIdx = (currentMonth - 1 + totalMonthsAhead) % 12;
+    const harvestYear = currentYear + Math.floor((currentMonth - 1 + totalMonthsAhead) / 12);
+    const harvest = `${monthNames[harvestMonthIdx]} ${harvestYear}`;
 
     // Map the moisture needs
     const waterDemand = c.soilMoistureMax > 0.45 ? 'High' : c.soilMoistureMax > 0.3 ? 'Medium' : 'Low';
 
     // Assign dynamic language name based on Nigerian cultural borders
-    // West/Yoruba (lower latitude, western longitude)
-    // East/Igbo (lower latitude, eastern longitude)
-    // North/Hausa (high latitude)
     let localName = c.localNames.hausa;
     let fallbackLang = 'Hausa';
     if (lat <= 9.3) {
@@ -172,16 +183,16 @@ function getDynamicAnalysis(
       }
     }
 
-    // Formulate a distinct, beautiful, dynamically matched reasoning sentence
+    // Formulate a distinct, seasonally grounded reasoning sentence
     let reason = '';
     const suitabilityLevel = match > 85 ? 'High' : match > 70 ? 'Moderate' : 'Marginal';
     
-    if (match > 85) {
-      reason = `${suitabilityLevel} fit as ${c.name} (called ${localName} in ${fallbackLang}) thrives in this ${currentZone} plot. Optimal pH is ${pH} and soil moisture matches your current ${soilType}.`;
-    } else if (match > 70) {
-      reason = `${suitabilityLevel} compatibility. Well-suited for ${soilType} and local temperature average of ${tempVal}°C. Growing period is ${c.daysToMaturity} days.`;
+    if (inSeason) {
+      reason = `In-Season for ${currentMonthName}: ${c.name} (called ${localName} in ${fallbackLang}) is in its ideal planting window for ${currentZone}. Maturity period is ${c.daysToMaturity} days, targeting harvest in ${harvest}.`;
+    } else if (match > 75) {
+      reason = `${suitabilityLevel} compatibility for ${currentZone}. Well-suited for ${soilType} and ${tempVal}°C. Growing window starts in ${monthNames[c.plantingMonths[0] - 1]}.`;
     } else {
-      reason = `${suitabilityLevel} compatibility due to annual precipitation profile (${annualRainfall}mm vs ideal ${c.rainfallMmMin}mm+). Grow with supplementary watering.`;
+      reason = `${suitabilityLevel} compatibility due to rainfall profile (${annualRainfall}mm vs ideal ${c.rainfallMmMin}mm+). Plant with supplementary irrigation.`;
     }
 
     return {
@@ -193,11 +204,19 @@ function getDynamicAnalysis(
       water: waterDemand,
       temp: `${c.tempCMin}–${c.tempCMax}°C`,
       duration: `${c.daysToMaturity} days`,
-      category: c.category
+      daysToMaturity: c.daysToMaturity,
+      category: c.category,
+      inSeason,
+      plantingMonthName: currentMonthName,
+      plantingMonths: c.plantingMonths
     };
   });
 
-  computedCrops.sort((a, b) => b.match - a.match);
+  // Sort by seasonal suitability first, then match percentage
+  computedCrops.sort((a, b) => {
+    if (a.inSeason !== b.inSeason) return (b.inSeason ? 1 : 0) - (a.inSeason ? 1 : 0);
+    return b.match - a.match;
+  });
 
   return {
     weather: {
@@ -215,10 +234,14 @@ function getDynamicAnalysis(
   };
 }
 
-export function CropPrediction({ onNavigate, profile }: Props) {
+export function CropPrediction({ onNavigate, profile, initialCropName }: Props) {
   const [selectedCrop, setSelectedCrop] = useState(0);
-  const [activeField, setActiveField] = useState(0);
+  // Default to -1 so the user's detected current location is the primary active location
+  const [activeField, setActiveField] = useState(-1);
   const [customLocation, setCustomLocation] = useState<{ lat: number, lng: number } | null>(null);
+  const [locationSource, setLocationSource] = useState<'gps' | 'ip' | 'profile' | 'fallback'>('gps');
+  const [isDetectingLocation, setIsDetectingLocation] = useState(true);
+
   const [weatherLayer, setWeatherLayer] = useState(false);
   const [soilLayer, setSoilLayer] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -227,8 +250,8 @@ export function CropPrediction({ onNavigate, profile }: Props) {
   const [progress, setProgress] = useState(0);
 
   const [mapMode, setMapMode] = useState<'interactive_mock' | 'live_osm'>('live_osm');
-  const [searchInput, setSearchInput] = useState('Kaduna, Kaduna State, Nigeria');
-  const [locationLabel, setLocationLabel] = useState('Kaduna Region, Nigeria');
+  const [searchInput, setSearchInput] = useState('');
+  const [locationLabel, setLocationLabel] = useState('Detecting current location...');
 
   const [analyzedLocationName, setAnalyzedLocationName] = useState<string | null>(null);
   const [analyzedCoords, setAnalyzedCoords] = useState<{ lat: number, lng: number } | null>(null);
@@ -249,6 +272,56 @@ export function CropPrediction({ onNavigate, profile }: Props) {
 
   const [farmerProducts, setFarmerProducts] = useState<{ name: string; category: string }[]>([]);
 
+  // Automatically detect user's current location on mount
+  useEffect(() => {
+    let active = true;
+    async function initLocation() {
+      setIsDetectingLocation(true);
+      try {
+        const detected = await detectCurrentLocation(profile?.farmState || profile?.deliveryAddress);
+        if (!active) return;
+        setCustomLocation({ lat: detected.lat, lng: detected.lng });
+        setActiveField(-1);
+        setLocationSource(detected.source);
+        setLocationLabel(detected.displayName);
+        setSearchInput(detected.displayName);
+        logUserAction('LOCATION_DETECTED', `Auto-detected user current location via ${detected.source}`, {
+          lat: detected.lat,
+          lng: detected.lng,
+          displayName: detected.displayName,
+          source: detected.source
+        });
+      } catch (err) {
+        console.warn('Failed to detect current location:', err);
+      } finally {
+        if (active) setIsDetectingLocation(false);
+      }
+    }
+    initLocation();
+    return () => { active = false; };
+  }, [profile]);
+
+  async function handleUseCurrentLocation() {
+    setIsDetectingLocation(true);
+    try {
+      const detected = await detectCurrentLocation(profile?.farmState || profile?.deliveryAddress);
+      setCustomLocation({ lat: detected.lat, lng: detected.lng });
+      setActiveField(-1);
+      setLocationSource(detected.source);
+      setLocationLabel(detected.displayName);
+      setSearchInput(detected.displayName);
+      logUserAction('CURRENT_LOCATION_TRIGGERED', 'User manually refreshed current GPS location', {
+        lat: detected.lat,
+        lng: detected.lng,
+        source: detected.source
+      });
+    } catch (err) {
+      console.error('Error refreshing current location:', err);
+    } finally {
+      setIsDetectingLocation(false);
+    }
+  }
+
   useEffect(() => {
     const unsub = subscribeToMarketplaceProducts((products) => {
       setFarmerProducts(products.map((p: any) => ({ name: (p.name || '').toLowerCase(), category: (p.category || '').toLowerCase() })));
@@ -258,7 +331,9 @@ export function CropPrediction({ onNavigate, profile }: Props) {
 
   const currentCenter = activeField === -1 && customLocation
     ? customLocation
-    : { lat: farmFields[activeField]?.lat || 10.5300, lng: farmFields[activeField]?.lng || 7.4200 };
+    : (farmFields[activeField]
+        ? { lat: farmFields[activeField].lat, lng: farmFields[activeField].lng }
+        : (customLocation || { lat: 10.5300, lng: 7.4200 }));
 
   const locationHasChanged = Boolean(
     runAnalysis &&
@@ -296,6 +371,7 @@ export function CropPrediction({ onNavigate, profile }: Props) {
       if (field) {
         setLocationLabel(`${field.label} · ${field.soil} parcel`);
         setSearchInput(`${field.label}, Kaduna State, Nigeria`);
+        setLocationSource('field');
       }
     }
   }, [activeField]);
@@ -307,6 +383,7 @@ export function CropPrediction({ onNavigate, profile }: Props) {
       if (result) {
         setCustomLocation({ lat: result.lat, lng: result.lng });
         setActiveField(-1);
+        setLocationSource('custom');
         setLocationLabel(result.displayName);
         logUserAction('MAP_COORDINATE_SEARCH', 'Farmer searched and located coordinate via Nominatim OSM', { query: searchInput, lat: result.lat, lng: result.lng });
       }
@@ -318,6 +395,7 @@ export function CropPrediction({ onNavigate, profile }: Props) {
   function handleLocationSelected(coords: { lat: number, lng: number }, placeName: string) {
     setCustomLocation(coords);
     setActiveField(-1);
+    setLocationSource('custom');
     setLocationLabel(placeName);
     setSearchInput(placeName);
     logUserAction('MAP_COORDINATE_CLICK', 'Farmer drop-pinned coordinate on Leaflet OSM', coords);
@@ -393,12 +471,27 @@ export function CropPrediction({ onNavigate, profile }: Props) {
     const farmerScore = (nameMatch ? 3 : 0) + (catMatch ? 1 : 0);
     return { ...c, farmerScore, fromFarmer: nameMatch };
   }).sort((a, b) => {
+    // Top priority: crops that grow / can be planted in the current month
+    if (a.inSeason !== b.inSeason) return (b.inSeason ? 1 : 0) - (a.inSeason ? 1 : 0);
     if (farmerProducts.length === 0) return b.match - a.match;
     if (b.farmerScore !== a.farmerScore) return b.farmerScore - a.farmerScore;
     return b.match - a.match;
   });
 
   const farmerMatchCount = cropList.filter(c => c.fromFarmer).length;
+
+  useEffect(() => {
+    if (initialCropName && cropList.length > 0) {
+      const idx = cropList.findIndex(c =>
+        c.name.toLowerCase() === initialCropName.toLowerCase() ||
+        initialCropName.toLowerCase().includes(c.name.toLowerCase()) ||
+        c.name.toLowerCase().includes(initialCropName.toLowerCase())
+      );
+      if (idx !== -1) {
+        setSelectedCrop(idx);
+      }
+    }
+  }, [initialCropName, cropList]);
 
   const crop = cropList[selectedCrop] || cropList[0];
 
@@ -432,6 +525,7 @@ export function CropPrediction({ onNavigate, profile }: Props) {
     setGenerated(true);
 
     if (profile && profile.uid) {
+      const now = new Date();
       const scheduleId = `${crop.name.replace(/\s+/g, '_').toLowerCase()}_${Date.now()}`;
       const newSchedule = {
         id: scheduleId,
@@ -445,7 +539,12 @@ export function CropPrediction({ onNavigate, profile }: Props) {
         waterNeeds: crop.water,
         tempRange: crop.temp,
         duration: crop.duration,
-        generatedAt: new Date().toISOString(),
+        daysToMaturity: crop.daysToMaturity || 90,
+        startDate: now.toISOString(), // Start date corresponds directly to current date (Day 1)
+        startDay: 1,                  // Schedule starts from Day 1
+        plantingMonth: now.getMonth() + 1,
+        inSeason: crop.inSeason,
+        generatedAt: now.toISOString(),
       };
 
       // Persist to Firestore so PlantingCalendar / Overview pick it up via onSnapshot
@@ -513,22 +612,74 @@ export function CropPrediction({ onNavigate, profile }: Props) {
             <button 
               type="button"
               onClick={handleSearch}
-              className="px-4 bg-[#27500A] text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-emerald-800 active:scale-95 transition-all text-center flex items-center justify-center"
+              className="px-3 sm:px-4 bg-[#27500A] text-white rounded-lg text-xs font-semibold cursor-pointer hover:bg-emerald-800 active:scale-95 transition-all text-center flex items-center justify-center shrink-0"
               style={{ height: 36 }}
             >
               Search
             </button>
+            <button
+              type="button"
+              onClick={handleUseCurrentLocation}
+              title="Use current GPS / device location"
+              className="px-3 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center gap-1.5 shrink-0 active:scale-95 hover:bg-emerald-100"
+              style={{
+                height: 36,
+                background: activeField === -1 && (locationSource === 'gps' || locationSource === 'ip') ? '#27500A' : '#EAF3DE',
+                color: activeField === -1 && (locationSource === 'gps' || locationSource === 'ip') ? '#fff' : '#27500A',
+                border: '0.5px solid rgba(39,80,10,0.25)'
+              }}
+            >
+              <Navigation size={13} className={isDetectingLocation ? 'animate-spin' : ''} />
+              <span className="hidden sm:inline">{isDetectingLocation ? 'Locating…' : 'My Location'}</span>
+            </button>
           </div>
 
-          <p className="text-xs text-gray-600 font-medium px-1 flex items-center gap-1.5 animate-fade-in" id="crop_location_label_line">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block animate-pulse"></span>
-            Location: <span className="font-semibold text-[#27500A]">{locationLabel}</span>
-          </p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-xs text-gray-600 font-medium px-1 animate-fade-in" id="crop_location_label_line">
+            <span className="flex items-center gap-1.5 min-w-0">
+              <span className={`w-2 h-2 rounded-full inline-block shrink-0 ${isDetectingLocation ? 'bg-amber-500 animate-ping' : 'bg-emerald-600 animate-pulse'}`}></span>
+              <span className="truncate">Active Location: <span className="font-semibold text-[#27500A]">{locationLabel}</span></span>
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              {locationSource === 'gps' && (
+                <span className="text-[10px] text-emerald-800 bg-emerald-100/80 border border-emerald-300 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                  <Navigation size={9} /> Current GPS Location
+                </span>
+              )}
+              {locationSource === 'ip' && (
+                <span className="text-[10px] text-blue-800 bg-blue-100/80 border border-blue-300 px-2 py-0.5 rounded-full font-medium flex items-center gap-1">
+                  🌐 Current Network Location
+                </span>
+              )}
+              {locationSource === 'custom' && (
+                <span className="text-[10px] text-amber-800 bg-amber-100/80 border border-amber-300 px-2 py-0.5 rounded-full font-medium">
+                  Custom Location
+                </span>
+              )}
+            </div>
+          </div>
 
           {/* Farm field selector buttons */}
-          <div className="flex gap-2" id="crop_prediction_field_selector">
+          <div className="flex flex-wrap sm:flex-nowrap gap-2" id="crop_prediction_field_selector">
+            <button
+              type="button"
+              onClick={handleUseCurrentLocation}
+              id="field_btn_my_location"
+              className="rounded-lg px-3 py-2 text-left transition-all cursor-pointer shrink-0 sm:flex-1"
+              style={{
+                border: `${activeField === -1 && (locationSource === 'gps' || locationSource === 'ip') ? '1.5px solid #27500A' : '0.5px solid rgba(0,0,0,0.12)'}`,
+                background: activeField === -1 && (locationSource === 'gps' || locationSource === 'ip') ? '#EAF3DE' : '#fff'
+              }}
+            >
+              <div className="flex items-center gap-1">
+                <Navigation size={12} className={activeField === -1 && (locationSource === 'gps' || locationSource === 'ip') ? 'text-[#27500A]' : 'text-gray-400'} />
+                <p style={{ fontSize: 12, fontWeight: 500, color: activeField === -1 && (locationSource === 'gps' || locationSource === 'ip') ? '#27500A' : '#444441' }}>Current Location</p>
+              </div>
+              <p style={{ fontSize: 10, color: '#5F5E5A' }}>
+                {isDetectingLocation ? 'Detecting…' : (locationSource === 'gps' ? 'Live GPS' : 'Active location')}
+              </p>
+            </button>
             {farmFields.map((f, i) => (
-              <button key={f.id} onClick={() => { setActiveField(i); setCustomLocation(null); }}
+              <button key={f.id} onClick={() => { setActiveField(i); setCustomLocation(null); setLocationSource('field'); }}
                 id={`field_btn_${f.id}`}
                 className="flex-1 rounded-lg px-3 py-2 text-left transition-all cursor-pointer"
                 style={{ border: `${activeField === i ? '1px' : '0.5px'} solid ${activeField === i ? '#3B6D11' : 'rgba(0,0,0,0.12)'}`, background: activeField === i ? '#EAF3DE' : '#fff' }}>
@@ -536,12 +687,12 @@ export function CropPrediction({ onNavigate, profile }: Props) {
                 <p style={{ fontSize: 10, color: '#5F5E5A' }}>{f.ha}ha · {f.soil}</p>
               </button>
             ))}
-            <button onClick={() => { setActiveField(-1); if (!customLocation) { setCustomLocation({ lat: 10.5300, lng: 7.4200 }); } }}
+            <button onClick={() => { setActiveField(-1); setLocationSource('custom'); if (!customLocation) { setCustomLocation({ lat: 10.5300, lng: 7.4200 }); } }}
               id="field_btn_custom"
-              className="rounded-lg px-3 py-2 text-left transition-all min-w-[100px] cursor-pointer"
-              style={{ border: `${activeField === -1 ? '1px' : '0.5px'} solid ${activeField === -1 ? '#e63946' : 'rgba(0,0,0,0.12)'}`, background: activeField === -1 ? '#ffe3e3' : '#fff' }}>
-              <p style={{ fontSize: 12, fontWeight: 500, color: activeField === -1 ? '#e63946' : '#444441' }}>Custom pin</p>
-              <p style={{ fontSize: 10, color: '#5F5E5A' }}>{activeField === -1 && customLocation ? 'Clicked spot' : 'Click Map'}</p>
+              className="rounded-lg px-3 py-2 text-left transition-all min-w-[90px] cursor-pointer"
+              style={{ border: `${activeField === -1 && locationSource === 'custom' ? '1px' : '0.5px'} solid ${activeField === -1 && locationSource === 'custom' ? '#e63946' : 'rgba(0,0,0,0.12)'}`, background: activeField === -1 && locationSource === 'custom' ? '#ffe3e3' : '#fff' }}>
+              <p style={{ fontSize: 12, fontWeight: 500, color: activeField === -1 && locationSource === 'custom' ? '#e63946' : '#444441' }}>Custom pin</p>
+              <p style={{ fontSize: 10, color: '#5F5E5A' }}>{activeField === -1 && locationSource === 'custom' ? 'Map pin' : 'Click Map'}</p>
             </button>
           </div>
 
@@ -875,7 +1026,8 @@ export function CropPrediction({ onNavigate, profile }: Props) {
                       </div>
                       <p style={{ fontSize: 12, fontWeight: 500, color: '#444441', marginBottom: 2 }}>{c.name}</p>
                       <div className="flex gap-1 mb-2 flex-wrap">
-                        {i === 0 && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#27500A', color: '#fff' }}>Best fit</span>}
+                        {c.inSeason && <span className="rounded-full px-1.5 py-0.5 font-medium" style={{ fontSize: 8, background: '#27500A', color: '#fff' }}>🌱 In Season</span>}
+                        {i === 0 && !c.inSeason && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#27500A', color: '#fff' }}>Best fit</span>}
                         {c.fromFarmer && <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#639922', color: '#fff' }}>In market</span>}
                         <span className="rounded-full px-1.5 py-0.5" style={{ fontSize: 8, background: '#F1EFE8', color: '#5F5E5A' }}>{c.category}</span>
                       </div>

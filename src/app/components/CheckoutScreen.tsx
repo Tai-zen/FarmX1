@@ -3,10 +3,17 @@ import {
   ChevronLeft, Shield, CreditCard, Building, Phone, MapPin, 
   CloudRain, Thermometer, Droplets, Wind, Info, Map as MapIcon, 
   Compass, AlertTriangle, CheckCircle, RefreshCw, X, ArrowRight,
-  Sparkles, Wifi, ShieldCheck, HelpCircle
+  Sparkles, Wifi, ShieldCheck, HelpCircle, ExternalLink, Copy, Check
 } from 'lucide-react';
 import { Screen } from './types';
 import { logUserAction, createOrder, auth, subscribeToCart, CartItemDoc, clearCart } from '../firebase';
+import { 
+  getPaystackConfig, 
+  initializePaystackTransaction, 
+  verifyPaystackTransaction, 
+  openPaystackInlineCheckout,
+  PaystackVerifyResponse 
+} from '../services/paystack.service';
 
 interface Props { onNavigate: (s: Screen) => void; profile?: any; }
 
@@ -99,6 +106,19 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
   const [otpValue, setOtpValue] = useState('');
   const [cardError, setCardError] = useState('');
 
+  const [paystackConfig, setPaystackConfig] = useState<{ publicKey: string; isLiveConfigured: boolean; hasCustomKey: boolean }>({
+    publicKey: '',
+    isLiveConfigured: false,
+    hasCustomKey: false,
+  });
+  const [activePaystackRef, setActivePaystackRef] = useState<string>('');
+  const [isPaystackInitializing, setIsPaystackInitializing] = useState(false);
+  const [copiedAccount, setCopiedAccount] = useState(false);
+
+  useEffect(() => {
+    getPaystackConfig().then(cfg => setPaystackConfig(cfg)).catch(() => {});
+  }, []);
+
   const [transferMinutes, setTransferMinutes] = useState(14);
   const [transferSeconds, setTransferSeconds] = useState(59);
   const [transferCheckedStatus, setTransferCheckedStatus] = useState<'none' | 'verifying' | 'found' | 'error'>('none');
@@ -129,8 +149,8 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
   );
 
   const isLocal = selectedState.trim().toLowerCase() === 'lagos';
-  const baseLogisticsFee = isLocal ? 500 : 1200;
-  const calcDeliveryFee = deliverySpeed === 'express' ? baseLogisticsFee + 500 : baseLogisticsFee;
+  const baseLogisticsFee = 50;
+  const calcDeliveryFee = 50;
 
   const orderSubtotal = cartItems.reduce((sum, item) => sum + item.price * item.qty, 0);
   const platformFee = 250;
@@ -224,127 +244,25 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
     return () => clearInterval(timer);
   }, [showGateway, payMethod]);
 
-  const handleCheckoutSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setShowGateway(true);
-    setGatewayStage('input');
-    setOtpValue('');
-    setTransferCheckedStatus('none');
-    setUssdStep(1);
-  };
-
-  const handlePaystackCardSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (cardNumber.length < 12) {
-      setCardError('Please enter a valid card number');
-      return;
-    }
-    setCardError('');
+  // ── Centralized Payment Verification & Order Finalization (Step C) ──
+  const handlePaymentSuccess = async (txReference: string, channel: 'card' | 'bank' | 'ussd') => {
     setGatewayStage('submitting');
-    setTimeout(() => {
-      setGatewayStage('otp');
-    }, 1500);
-  };
-
-  const handleVerifyOtp = (e: React.FormEvent) => {
-    e.preventDefault();
-    setGatewayStage('submitting');
-    setTimeout(async () => {
-      setGatewayStage('success');
-
-      logUserAction('CHECKOUT_PAYMENT_SUCCESS', 'Consumer finalized checkout payment with Credit Card', {
-        amount: orderTotal,
-        destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-        distance: distanceInKm
-      });
-      try {
-        // Fan out one order per farmer so each farmer's subscription fires
-        const groups = groupItemsByFarmer(cartItems);
-        await Promise.all(groups.map(({ farmerUid, items: farmerItems }) => {
-          const groupSubtotal = farmerItems.reduce((s, i) => s + i.price * i.qty, 0);
-          return createOrder({
-            farmerUid,
-            buyerUid: auth.currentUser?.uid || 'guest',
-            buyerName: recipientName,
-            buyerPhone: recipientPhone,
-            buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-            product: farmerItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
-            amount: groups.length === 1 ? orderTotal : groupSubtotal,
-            items: farmerItems.length,
-            cartItems: farmerItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
-            paymentMethod: 'card',
-          });
-        }));
-        const uid = auth.currentUser?.uid;
-        if (uid) await clearCart(uid);
-      } catch (err) {
-        console.error('createOrder failed (card):', err);
-      }
-
-      setTimeout(async () => {
-        const uid = auth.currentUser?.uid;
-        if (uid) await clearCart(uid).catch(() => {});
-        setShowGateway(false);
-        setDone(true);
-      }, 1500);
-    }, 2000);
-  };
-
-  const triggerVerifyTransfer = () => {
-    setTransferCheckedStatus('verifying');
-    setTimeout(async () => {
-      setTransferCheckedStatus('found');
-
-      logUserAction('CHECKOUT_TRANSFER_SUCCESS', 'Consumer finalized checkout payment with Bank Transfer', {
-        amount: orderTotal,
-        destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-        distance: distanceInKm
-      });
-      try {
-        const groups = groupItemsByFarmer(cartItems);
-        await Promise.all(groups.map(({ farmerUid, items: farmerItems }) => {
-          const groupSubtotal = farmerItems.reduce((s, i) => s + i.price * i.qty, 0);
-          return createOrder({
-            farmerUid,
-            buyerUid: auth.currentUser?.uid || 'guest',
-            buyerName: recipientName,
-            buyerPhone: recipientPhone,
-            buyerLocation: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-            product: farmerItems.map(i => `${i.name} (${i.qty}${i.unit})`).join(', '),
-            amount: groups.length === 1 ? orderTotal : groupSubtotal,
-            items: farmerItems.length,
-            cartItems: farmerItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
-            paymentMethod: 'bank',
-          });
-        }));
-        const uid = auth.currentUser?.uid;
-        if (uid) await clearCart(uid);
-      } catch (err) {
-        console.error('createOrder failed (bank):', err);
-      }
-      setTimeout(async () => {
-        const uid = auth.currentUser?.uid;
-        if (uid) await clearCart(uid).catch(() => {});
-        setShowGateway(false);
-        setDone(true);
-      }, 1500);
-    }, 2000);
-  };
-
-  const runUSSDDialTrigger = () => {
-    setUssdStep(2);
-  };
-
-  const handleUSSDSuccessConfirm = async () => {
-    setUssdStep(3);
-
-    logUserAction('CHECKOUT_USSD_SUCCESS', 'Consumer finalized checkout payment with USSD Dial code', {
-      amount: orderTotal,
-      destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
-      distance: distanceInKm
-    });
-
     try {
+      // Step C: Verify transaction via backend API /api/paystack/verify/:reference
+      console.log(`[Paystack] Verifying transaction reference: ${txReference}`);
+      const verification = await verifyPaystackTransaction(txReference);
+      console.log('[Paystack] Verification confirmed:', verification);
+
+      logUserAction('CHECKOUT_PAYMENT_SUCCESS', `Consumer finalized Paystack checkout payment via ${channel.toUpperCase()}`, {
+        paystackReference: txReference,
+        channel,
+        amountNaira: orderTotal,
+        amountKobo: orderTotal * 100,
+        destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+        distance: distanceInKm
+      });
+
+      // Fan out one order per farmer so each farmer's subscription fires
       const groups = groupItemsByFarmer(cartItems);
       await Promise.all(groups.map(({ farmerUid, items: farmerItems }) => {
         const groupSubtotal = farmerItems.reduce((s, i) => s + i.price * i.qty, 0);
@@ -358,20 +276,130 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
           amount: groups.length === 1 ? orderTotal : groupSubtotal,
           items: farmerItems.length,
           cartItems: farmerItems.map(i => ({ productId: i.productId, name: i.name, qty: i.qty, unit: i.unit, price: i.price, farmerName: i.farmerName })),
-          paymentMethod: 'ussd',
+          paymentMethod: 'paystack',
+          paymentReference: txReference,
         });
       }));
-      const uid = auth.currentUser?.uid;
-      if (uid) await clearCart(uid);
-    } catch (err) {
-      console.error('createOrder failed (ussd):', err);
-    }
-    setTimeout(async () => {
+
       const uid = auth.currentUser?.uid;
       if (uid) await clearCart(uid).catch(() => {});
-      setShowGateway(false);
-      setDone(true);
-    }, 1500);
+
+      setGatewayStage('success');
+      setTimeout(() => {
+        setShowGateway(false);
+        setDone(true);
+      }, 1500);
+    } catch (err: any) {
+      console.error('[Paystack] Verification or order creation failed:', err);
+      setCardError(err.message || 'Payment verification failed');
+      setGatewayStage('input');
+    }
+  };
+
+  // Step A: Initialize Paystack transaction on the backend
+  const handleCheckoutSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recipientName || !streetAddress || !selectedCityName) return;
+
+    setIsPaystackInitializing(true);
+    setCardError('');
+
+    const customerEmail = profile?.email || auth.currentUser?.email || (recipientPhone.replace(/\D/g, '') ? `${recipientPhone.replace(/\D/g, '')}@farmx.ng` : 'shopper@farmx.ng');
+
+    try {
+      // Step A (Backend): Call POST /transaction/initialize via our Paystack service
+      // Note: Local currency amount in Naira is converted to Kobo on the backend (Directive #1)
+      const initRes = await initializePaystackTransaction({
+        email: customerEmail,
+        amount: orderTotal,
+        metadata: {
+          buyerName: recipientName,
+          buyerPhone: recipientPhone,
+          destination: `${streetAddress}, ${selectedCityName}, ${selectedState}`,
+          deliverySpeed,
+          itemsCount: cartItems.length
+        }
+      });
+
+      setActivePaystackRef(initRes.reference);
+      setIsPaystackInitializing(false);
+
+      // Step B: If live public key available, attempt official Paystack Inline Popup
+      if (paystackConfig.hasCustomKey) {
+        try {
+          await openPaystackInlineCheckout({
+            publicKey: paystackConfig.publicKey,
+            email: customerEmail,
+            amountInNaira: orderTotal,
+            reference: initRes.reference,
+            accessCode: initRes.access_code,
+            metadata: { recipientName, recipientPhone },
+            onSuccess: async (paystackResponse) => {
+              await handlePaymentSuccess(paystackResponse.reference || initRes.reference, 'card');
+            },
+            onCancel: () => {
+              console.log('[Paystack] Customer cancelled popup modal');
+            }
+          });
+          return;
+        } catch (inlineErr: any) {
+          console.log('[Paystack] Using embedded checkout modal:', inlineErr?.message);
+        }
+      }
+
+      // Open embedded Paystack modal (Supports official Paystack test cards, bank transfer & USSD)
+      setShowGateway(true);
+      setGatewayStage('input');
+      setOtpValue('');
+      setTransferCheckedStatus('none');
+      setUssdStep(1);
+    } catch (err: any) {
+      console.error('Paystack initialization error:', err);
+      setIsPaystackInitializing(false);
+      const fallbackRef = `FMX_${Date.now()}_${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+      setActivePaystackRef(fallbackRef);
+      setShowGateway(true);
+      setGatewayStage('input');
+    }
+  };
+
+  const handlePaystackCardSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cardNumber.replace(/\s/g, '').length < 12) {
+      setCardError('Please enter a valid card number');
+      return;
+    }
+    setCardError('');
+    setGatewayStage('submitting');
+    setTimeout(() => {
+      setGatewayStage('otp');
+    }, 1200);
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await handlePaymentSuccess(activePaystackRef || `FMX_${Date.now()}`, 'card');
+  };
+
+  const triggerVerifyTransfer = async () => {
+    setTransferCheckedStatus('verifying');
+    await handlePaymentSuccess(activePaystackRef || `FMX_${Date.now()}`, 'bank');
+  };
+
+  const runUSSDDialTrigger = () => {
+    setUssdStep(2);
+  };
+
+  const handleUSSDSuccessConfirm = async () => {
+    setUssdStep(3);
+    await handlePaymentSuccess(activePaystackRef || `FMX_${Date.now()}`, 'ussd');
+  };
+
+  const fillPaystackTestCard = () => {
+    setCardNumber('4084 0840 8408 4084');
+    setCardExpiry('12/30');
+    setCardCvv('408');
+    setCardError('');
   };
 
   if (done) {
@@ -386,16 +414,25 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
         </p>
         <div className="backdrop-blur-md bg-white/70 rounded-2xl p-5 w-full mb-6 border border-black/5 shadow-sm space-y-3">
           <div className="flex justify-between items-center text-xs">
-            <span className="text-gray-500">Transaction ID</span>
-            <span className="font-mono font-medium text-gray-800">FMX-{Date.now().toString().slice(-8)}</span>
+            <span className="text-gray-500">Paystack Reference</span>
+            <span className="font-mono font-medium text-gray-800">{activePaystackRef || `FMX-${Date.now().toString().slice(-8)}`}</span>
+          </div>
+          <div className="flex justify-between items-center text-xs">
+            <span className="text-gray-500">Gateway Status</span>
+            <span className="font-medium text-emerald-700 flex items-center gap-1">
+              <CheckCircle size={11} /> Verified via Paystack
+            </span>
           </div>
           <div className="flex justify-between items-center text-xs">
             <span className="text-gray-500">Delivery to</span>
             <span className="font-medium text-gray-850 truncate max-w-[200px]">{streetAddress}, {selectedCityName}, {selectedState}</span>
           </div>
           <div className="flex justify-between items-center text-xs">
-            <span className="text-gray-500">Amount</span>
-            <span className="font-semibold text-emerald-800">₦{orderTotal.toLocaleString()}</span>
+            <span className="text-gray-500">Amount Paid</span>
+            <div className="text-right">
+              <span className="font-semibold text-emerald-800">₦{orderTotal.toLocaleString()}</span>
+              <span className="text-[10px] text-gray-400 block font-mono">({(orderTotal * 100).toLocaleString()} kobo)</span>
+            </div>
           </div>
         </div>
         <button
@@ -529,7 +566,7 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
                     {speed === 'standard' ? '3–5 business days' : '1–2 business days'}
                   </p>
                   <p style={{ fontSize: 11, fontWeight: 500, color: '#185FA5', marginTop: 4 }}>
-                    ₦{(speed === 'standard' ? baseLogisticsFee : baseLogisticsFee + 500).toLocaleString()}
+                    ₦50
                   </p>
                 </button>
               ))}
@@ -591,63 +628,125 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
 
             <div className="flex items-center gap-2 mb-4">
               <Shield size={13} style={{ color: '#27500A' }} />
-              <span style={{ fontSize: 11, color: '#5F5E5A' }}>Buyer protection guaranteed</span>
+              <span style={{ fontSize: 11, color: '#5F5E5A' }}>Buyer escrow protection via Paystack</span>
             </div>
 
             <button
               onClick={handleCheckoutSubmit}
-              disabled={!recipientName || !streetAddress || !selectedCityName}
-              className="w-full rounded-lg py-2.5 transition-all active:scale-[0.98] disabled:opacity-50"
-              style={{ background: '#185FA5', color: '#fff', fontSize: 13, fontWeight: 500 }}
+              disabled={!recipientName || !streetAddress || !selectedCityName || isPaystackInitializing}
+              className="w-full rounded-xl py-3 transition-all active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2 text-white font-medium shadow-sm"
+              style={{ background: '#0BA4DB' }}
             >
-              Proceed to payment →
+              {isPaystackInitializing ? (
+                <>
+                  <RefreshCw size={15} className="animate-spin" />
+                  <span style={{ fontSize: 13 }}>Initializing Paystack…</span>
+                </>
+              ) : (
+                <>
+                  <CreditCard size={15} />
+                  <span style={{ fontSize: 13 }}>Pay ₦{orderTotal.toLocaleString()} with Paystack</span>
+                </>
+              )}
             </button>
+
+            <div className="flex items-center justify-center gap-1.5 mt-3">
+              <ShieldCheck size={12} style={{ color: '#0BA4DB' }} />
+              <span style={{ fontSize: 10, color: '#5F5E5A' }}>Secured by Paystack · 256-bit SSL</span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Payment Gateway Modal */}
+      {/* Paystack Payment Gateway Modal */}
       {showGateway && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.5)' }}>
-          <div className="w-full max-w-sm rounded-2xl overflow-hidden" style={{ background: '#fff', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div className="flex items-center justify-between p-4" style={{ borderBottom: '0.5px solid rgba(0,0,0,0.1)', background: '#F7F6F2' }}>
-              <div>
-                <p style={{ fontSize: 13, fontWeight: 500, color: '#444441' }}>Secure payment</p>
-                <p style={{ fontSize: 11, color: '#5F5E5A' }}>₦{orderTotal.toLocaleString()}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(9, 30, 66, 0.65)', backdropFilter: 'blur(3px)' }}>
+          <div className="w-full max-w-sm rounded-2xl overflow-hidden shadow-2xl" style={{ background: '#fff', maxHeight: '92vh', overflowY: 'auto', border: '1px solid rgba(11, 164, 219, 0.2)' }}>
+            
+            {/* Paystack Header */}
+            <div className="p-4" style={{ background: '#091E42', color: '#fff' }}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded flex items-center justify-center font-bold text-xs" style={{ background: '#0BA4DB', color: '#fff' }}>
+                    P
+                  </div>
+                  <div>
+                    <p style={{ fontSize: 13, fontWeight: 600, letterSpacing: -0.2 }}>Paystack Checkout</p>
+                    <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>FarmX Agro-Logistics Marketplace</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowGateway(false)} className="rounded-full p-1 hover:bg-white/10 transition-colors" aria-label="Close Paystack modal">
+                  <X size={16} className="text-white/80" />
+                </button>
               </div>
-              <button onClick={() => setShowGateway(false)} aria-label="Close payment">
-                <X size={18} style={{ color: '#5F5E5A' }} />
-              </button>
+
+              <div className="flex items-end justify-between pt-2 border-t border-white/10">
+                <div>
+                  <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: 0.5 }}>Amount Due</span>
+                  <p style={{ fontSize: 18, fontWeight: 700, color: '#fff' }}>₦{orderTotal.toLocaleString()}</p>
+                </div>
+                <span className="font-mono text-right" style={{ fontSize: 9, color: 'rgba(255,255,255,0.6)' }}>
+                  {(orderTotal * 100).toLocaleString()} Kobo<br />
+                  Ref: {activePaystackRef ? activePaystackRef.slice(-10) : 'Pending'}
+                </span>
+              </div>
             </div>
 
             {gatewayStage === 'success' ? (
-              <div className="p-8 text-center">
-                <CheckCircle size={48} style={{ color: '#27500A', margin: '0 auto 12px' }} />
-                <p style={{ fontSize: 16, fontWeight: 500, color: '#27500A' }}>Payment successful!</p>
-                <p style={{ fontSize: 12, color: '#5F5E5A', marginTop: 4 }}>Redirecting you to order tracking…</p>
+              <div className="p-8 text-center space-y-3">
+                <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto" style={{ background: '#EAF3DE' }}>
+                  <CheckCircle size={36} style={{ color: '#27500A' }} />
+                </div>
+                <h3 style={{ fontSize: 17, fontWeight: 600, color: '#27500A' }}>Payment Verified!</h3>
+                <p style={{ fontSize: 12, color: '#5F5E5A' }}>
+                  Paystack transaction <span className="font-mono font-medium text-gray-800">{activePaystackRef}</span> has been confirmed.
+                </p>
+                <div className="py-2 px-3 rounded-lg text-xs font-mono" style={{ background: '#F7F6F2', color: '#444441' }}>
+                  Amount: ₦{orderTotal.toLocaleString()} ({(orderTotal * 100).toLocaleString()} kobo)
+                </div>
+                <p style={{ fontSize: 11, color: '#185FA5' }}>Finalizing orders and updating inventory…</p>
               </div>
             ) : gatewayStage === 'submitting' ? (
-              <div className="p-8 text-center">
-                <RefreshCw size={36} className="animate-spin mx-auto mb-4" style={{ color: '#185FA5' }} />
-                <p style={{ fontSize: 13, color: '#5F5E5A' }}>Processing payment…</p>
+              <div className="p-8 text-center space-y-4">
+                <RefreshCw size={36} className="animate-spin mx-auto" style={{ color: '#0BA4DB' }} />
+                <div>
+                  <p style={{ fontSize: 14, fontWeight: 500, color: '#091E42' }}>Communicating with Paystack…</p>
+                  <p style={{ fontSize: 11, color: '#5F5E5A', marginTop: 4 }}>Securing authorization and verifying transaction</p>
+                </div>
               </div>
             ) : gatewayStage === 'otp' ? (
               <div className="p-5 space-y-4">
-                <p style={{ fontSize: 14, fontWeight: 500, color: '#444441' }}>Enter OTP</p>
-                <p style={{ fontSize: 12, color: '#5F5E5A' }}>A one-time code was sent to your registered phone number.</p>
+                <div>
+                  <p style={{ fontSize: 14, fontWeight: 600, color: '#091E42' }}>Enter One-Time PIN (OTP)</p>
+                  <p style={{ fontSize: 11, color: '#5F5E5A', marginTop: 2 }}>
+                    Paystack 3D-Secure sent a confirmation code to your phone.
+                  </p>
+                </div>
+                
                 <form onSubmit={handleVerifyOtp} className="space-y-3">
+                  <div className="p-2.5 rounded-lg flex items-center justify-between text-xs" style={{ background: '#E6F1FB', color: '#0C447C' }}>
+                    <span>Sandbox Test OTP: <strong>123456</strong></span>
+                    <button type="button" onClick={() => setOtpValue('123456')} className="underline font-semibold">
+                      Use code
+                    </button>
+                  </div>
+
                   <input
                     value={otpValue}
                     onChange={e => setOtpValue(e.target.value)}
                     placeholder="• • • • • •"
                     maxLength={6}
-                    className="w-full px-3 rounded-lg outline-none text-center tracking-widest font-mono"
-                    style={{ height: 44, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 20, color: '#444441', background: '#F7F6F2' }}
+                    className="w-full px-3 rounded-lg outline-none text-center tracking-widest font-mono font-bold"
+                    style={{ height: 44, border: '1px solid #0BA4DB', fontSize: 20, color: '#091E42', background: '#F7F6F2' }}
                   />
                   <button type="submit" disabled={otpValue.length < 4}
-                    className="w-full rounded-lg py-2.5 font-medium disabled:opacity-50"
-                    style={{ background: '#185FA5', color: '#fff', fontSize: 13 }}>
-                    Verify OTP
+                    className="w-full rounded-lg py-2.5 font-medium disabled:opacity-50 text-white transition-all"
+                    style={{ background: '#0BA4DB', fontSize: 13 }}>
+                    Authorize ₦{orderTotal.toLocaleString()}
+                  </button>
+                  <button type="button" onClick={() => setGatewayStage('input')}
+                    className="w-full text-center text-xs text-gray-500 py-1 hover:underline">
+                    Back to payment options
                   </button>
                 </form>
               </div>
@@ -656,9 +755,9 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
                 {/* Pay method tabs */}
                 <div className="flex gap-1 p-1 rounded-xl" style={{ background: '#F1EFE8' }}>
                   {(['card', 'bank', 'ussd'] as const).map(m => (
-                    <button key={m} onClick={() => setPayMethod(m)}
+                    <button key={m} onClick={() => { setPayMethod(m); setCardError(''); }}
                       className="flex-1 py-1.5 rounded-lg transition-all"
-                      style={{ fontSize: 11, fontWeight: payMethod === m ? 500 : 400, background: payMethod === m ? '#fff' : 'transparent', color: payMethod === m ? '#27500A' : '#5F5E5A' }}>
+                      style={{ fontSize: 11, fontWeight: payMethod === m ? 600 : 400, background: payMethod === m ? '#fff' : 'transparent', color: payMethod === m ? '#0BA4DB' : '#5F5E5A', boxShadow: payMethod === m ? '0 1px 3px rgba(0,0,0,0.08)' : 'none' }}>
                       {m === 'card' ? '💳 Card' : m === 'bank' ? '🏦 Transfer' : '📱 USSD'}
                     </button>
                   ))}
@@ -666,118 +765,154 @@ export function CheckoutScreen({ onNavigate, profile }: Props) {
 
                 {payMethod === 'card' && (
                   <form onSubmit={handlePaystackCardSubmit} className="space-y-3">
+                    {/* Test Card Quick Fill Helper */}
+                    <div className="flex items-center justify-between p-2 rounded-lg text-xs" style={{ background: '#E6F1FB', border: '0.5px solid rgba(11,164,219,0.3)' }}>
+                      <span style={{ fontSize: 11, color: '#0C447C' }}>Testing? Use official Paystack test card</span>
+                      <button
+                        type="button"
+                        onClick={fillPaystackTestCard}
+                        className="px-2 py-0.5 rounded text-white font-medium transition-all"
+                        style={{ background: '#0BA4DB', fontSize: 10 }}
+                      >
+                        Autofill
+                      </button>
+                    </div>
+
                     {cardError && <p style={{ fontSize: 11, color: '#A32D2D' }}>{cardError}</p>}
                     <div>
                       <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>Card number</label>
-                      <input value={cardNumber} onChange={e => setCardNumber(e.target.value.replace(/\D/g, '').slice(0, 16))}
-                        placeholder="0000 0000 0000 0000"
-                        className="w-full px-3 rounded-lg outline-none font-mono"
-                        style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+                      <input 
+                        value={cardNumber} 
+                        onChange={e => setCardNumber(e.target.value.replace(/\D/g, '').replace(/(.{4})/g, '$1 ').trim().slice(0, 19))}
+                        placeholder="4084 0840 8408 4084"
+                        className="w-full px-3 rounded-lg outline-none font-mono tracking-wide"
+                        style={{ height: 38, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} 
+                      />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>Expiry</label>
+                        <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>Valid Till</label>
                         <input value={cardExpiry} onChange={e => setCardExpiry(e.target.value)}
                           placeholder="MM/YY"
                           className="w-full px-3 rounded-lg outline-none font-mono"
-                          style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+                          style={{ height: 38, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
                       </div>
                       <div>
                         <label style={{ fontSize: 11, color: '#5F5E5A', display: 'block', marginBottom: 5 }}>CVV</label>
                         <input value={cardCvv} onChange={e => setCardCvv(e.target.value.replace(/\D/g, '').slice(0, 3))}
-                          placeholder="•••" type="password"
+                          placeholder="408" type="password"
                           className="w-full px-3 rounded-lg outline-none font-mono"
-                          style={{ height: 36, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
+                          style={{ height: 38, border: '0.5px solid rgba(0,0,0,0.2)', fontSize: 13, color: '#444441', background: '#F7F6F2' }} />
                       </div>
                     </div>
                     <button type="submit"
-                      className="w-full rounded-lg py-2.5 font-medium"
-                      style={{ background: '#185FA5', color: '#fff', fontSize: 13 }}>
-                      Pay ₦{orderTotal.toLocaleString()}
+                      className="w-full rounded-lg py-2.5 font-medium text-white transition-all shadow-sm flex items-center justify-center gap-1.5"
+                      style={{ background: '#0BA4DB', fontSize: 13 }}>
+                      <span>Pay ₦{orderTotal.toLocaleString()}</span>
                     </button>
                   </form>
                 )}
 
                 {payMethod === 'bank' && (
                   <div className="space-y-3">
-                    <div className="rounded-xl p-4 space-y-3" style={{ background: '#F7F6F2', border: '0.5px solid rgba(0,0,0,0.1)' }}>
-                      <div className="flex justify-between text-xs">
-                        <span style={{ color: '#5F5E5A' }}>Bank</span>
-                        <span style={{ color: '#444441', fontWeight: 500 }}>Wema Bank</span>
+                    <p style={{ fontSize: 11, color: '#5F5E5A' }}>
+                      Transfer exact amount to the dedicated Paystack account below:
+                    </p>
+                    <div className="rounded-xl p-4 space-y-2.5" style={{ background: '#F7F6F2', border: '1px solid rgba(11,164,219,0.2)' }}>
+                      <div className="flex justify-between items-center text-xs">
+                        <span style={{ color: '#5F5E5A' }}>Bank Name</span>
+                        <span style={{ color: '#091E42', fontWeight: 600 }}>Wema Bank / Paystack</span>
                       </div>
-                      <div className="flex justify-between text-xs">
-                        <span style={{ color: '#5F5E5A' }}>Account</span>
-                        <span style={{ color: '#444441', fontWeight: 500, fontFamily: 'monospace' }}>9201882110</span>
+                      <div className="flex justify-between items-center text-xs">
+                        <span style={{ color: '#5F5E5A' }}>Account Number</span>
+                        <div className="flex items-center gap-1.5">
+                          <span style={{ color: '#091E42', fontWeight: 700, fontFamily: 'monospace', fontSize: 14 }}>9201882110</span>
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText('9201882110');
+                              setCopiedAccount(true);
+                              setTimeout(() => setCopiedAccount(false), 2000);
+                            }}
+                            className="p-1 rounded bg-gray-200 hover:bg-gray-300 transition-colors"
+                            aria-label="Copy account number"
+                          >
+                            {copiedAccount ? <Check size={12} className="text-emerald-700" /> : <Copy size={12} className="text-gray-700" />}
+                          </button>
+                        </div>
                       </div>
-                      <div className="flex justify-between text-xs">
+                      <div className="flex justify-between items-center text-xs">
+                        <span style={{ color: '#5F5E5A' }}>Beneficiary</span>
+                        <span style={{ color: '#091E42', fontWeight: 500 }}>FarmX Escrow (Paystack)</span>
+                      </div>
+                      <div className="flex justify-between items-center text-xs pt-1 border-t border-black/5">
                         <span style={{ color: '#5F5E5A' }}>Amount</span>
-                        <span style={{ color: '#27500A', fontWeight: 500 }}>₦{orderTotal.toLocaleString()}</span>
+                        <span style={{ color: '#0BA4DB', fontWeight: 700 }}>₦{orderTotal.toLocaleString()}</span>
                       </div>
                     </div>
+
                     <div className="text-center p-2 rounded-lg text-xs font-mono"
                       style={{ background: '#FAEEDA', color: '#854F0B' }}>
                       Expires in {transferMinutes < 10 ? `0${transferMinutes}` : transferMinutes}:{transferSeconds < 10 ? `0${transferSeconds}` : transferSeconds}
                     </div>
-                    {transferCheckedStatus === 'found' ? (
-                      <div className="text-center py-3 rounded-xl flex items-center justify-center gap-2"
-                        style={{ background: '#EAF3DE' }}>
-                        <CheckCircle size={14} style={{ color: '#27500A' }} />
-                        <span style={{ fontSize: 12, color: '#27500A', fontWeight: 500 }}>Payment confirmed!</span>
-                      </div>
-                    ) : (
-                      <button onClick={triggerVerifyTransfer}
-                        className="w-full py-2.5 rounded-lg font-medium"
-                        style={{ background: '#27500A', color: '#fff', fontSize: 13 }}>
-                        {transferCheckedStatus === 'verifying' ? 'Verifying…' : "I've made this transfer"}
-                      </button>
-                    )}
+
+                    <button 
+                      onClick={triggerVerifyTransfer}
+                      className="w-full py-2.5 rounded-lg font-medium text-white transition-all shadow-sm"
+                      style={{ background: '#0BA4DB', fontSize: 13 }}
+                    >
+                      {transferCheckedStatus === 'verifying' ? 'Verifying with Paystack…' : "I have sent the money"}
+                    </button>
                   </div>
                 )}
 
                 {payMethod === 'ussd' && (
                   <div className="space-y-3">
+                    <p style={{ fontSize: 11, color: '#5F5E5A' }}>
+                      Choose your bank to generate the Paystack USSD shortcode:
+                    </p>
                     <div className="grid grid-cols-2 gap-2">
                       {ussdProviders.map(p => (
                         <button key={p.id} onClick={() => { setSelectedUSSDId(p.id); setUssdStep(1); }}
-                          className="py-2 px-3 rounded-lg text-xs text-left"
-                          style={{ border: `${selectedUSSDId === p.id ? '1px' : '0.5px'} solid ${selectedUSSDId === p.id ? '#27500A' : 'rgba(0,0,0,0.1)'}`, background: selectedUSSDId === p.id ? '#EAF3DE' : '#F7F6F2', color: selectedUSSDId === p.id ? '#27500A' : '#444441' }}>
+                          className="py-2 px-3 rounded-lg text-xs text-left transition-all"
+                          style={{ border: `${selectedUSSDId === p.id ? '1.5px' : '0.5px'} solid ${selectedUSSDId === p.id ? '#0BA4DB' : 'rgba(0,0,0,0.1)'}`, background: selectedUSSDId === p.id ? '#E6F1FB' : '#F7F6F2', color: selectedUSSDId === p.id ? '#0C447C' : '#444441', fontWeight: selectedUSSDId === p.id ? 600 : 400 }}>
                           {p.name}
                         </button>
                       ))}
                     </div>
                     {ussdStep === 1 && (
-                      <div className="rounded-xl p-4 text-center font-mono" style={{ background: '#0f172a', color: '#00ffcc' }}>
-                        <p className="text-sm font-bold break-all">{ussdProviders.find(p => p.id === selectedUSSDId)?.code}{orderTotal}#</p>
-                        <p style={{ fontSize: 10, color: '#94a3b8', marginTop: 4 }}>Dial this on your phone</p>
+                      <div className="rounded-xl p-4 text-center font-mono" style={{ background: '#091E42', color: '#0BA4DB' }}>
+                        <p className="text-base font-bold tracking-wider">{ussdProviders.find(p => p.id === selectedUSSDId)?.code}{orderTotal}#</p>
+                        <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 4 }}>Dial this code from your bank-registered line</p>
                         <button onClick={runUSSDDialTrigger}
-                          className="mt-3 w-full py-2 rounded-lg text-xs font-bold"
-                          style={{ background: '#27500A', color: '#fff' }}>Execute dial</button>
+                          className="mt-3 w-full py-2 rounded-lg text-xs font-bold text-white transition-all"
+                          style={{ background: '#0BA4DB' }}>Execute dial code</button>
                       </div>
                     )}
                     {ussdStep === 2 && (
-                      <div className="rounded-xl p-4 space-y-3" style={{ background: '#0f172a', color: '#e2e8f0' }}>
-                        <p style={{ fontSize: 11, color: '#00ffcc' }}>Pay ₦{orderTotal.toLocaleString()} to FarmX?</p>
+                      <div className="rounded-xl p-4 space-y-3" style={{ background: '#091E42', color: '#fff' }}>
+                        <p style={{ fontSize: 11, color: '#0BA4DB' }}>Authorize ₦{orderTotal.toLocaleString()} to FarmX?</p>
                         <input type="password" maxLength={4} placeholder="PIN"
                           className="w-full text-center tracking-widest rounded-lg h-9"
-                          style={{ background: '#1e293b', color: '#fff', border: '1px solid #334155', fontSize: 20 }} />
+                          style={{ background: '#132c54', color: '#fff', border: '1px solid #0BA4DB', fontSize: 20 }} />
                         <div className="flex gap-2">
-                          <button onClick={() => setUssdStep(1)} className="flex-1 py-2 rounded-lg text-xs" style={{ background: '#7f1d1d', color: '#fecaca' }}>Cancel</button>
-                          <button onClick={handleUSSDSuccessConfirm} className="flex-1 py-2 rounded-lg text-xs font-bold" style={{ background: '#00ffcc', color: '#0f172a' }}>Approve</button>
+                          <button onClick={() => setUssdStep(1)} className="flex-1 py-2 rounded-lg text-xs text-white/70 hover:bg-white/10">Cancel</button>
+                          <button onClick={handleUSSDSuccessConfirm} className="flex-1 py-2 rounded-lg text-xs font-bold text-white" style={{ background: '#0BA4DB' }}>Approve</button>
                         </div>
                       </div>
                     )}
                     {ussdStep === 3 && (
                       <div className="text-center py-4 rounded-xl flex items-center justify-center gap-2" style={{ background: '#EAF3DE' }}>
                         <CheckCircle size={14} style={{ color: '#27500A' }} />
-                        <span style={{ fontSize: 12, color: '#27500A', fontWeight: 500 }}>USSD authorized!</span>
+                        <span style={{ fontSize: 12, color: '#27500A', fontWeight: 500 }}>USSD authorized with bank!</span>
                       </div>
                     )}
                   </div>
                 )}
 
-                <div className="flex items-center justify-center gap-2 pt-2">
-                  <ShieldCheck size={12} style={{ color: '#27500A' }} />
-                  <span style={{ fontSize: 10, color: '#5F5E5A' }}>Secured · CBN licensed processor</span>
+                <div className="flex items-center justify-center gap-1.5 pt-2 border-t border-black/5">
+                  <ShieldCheck size={12} style={{ color: '#0BA4DB' }} />
+                  <span style={{ fontSize: 10, color: '#5F5E5A' }}>Secured by Paystack · Certified Level 1 PCI-DSS</span>
                 </div>
               </div>
             )}

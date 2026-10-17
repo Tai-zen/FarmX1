@@ -32,6 +32,77 @@
         "timestamp": { "type": "string", "format": "date-time", "description": "Timestamp action performed" }
       },
       "required": ["id", "uid", "actionType", "timestamp"]
+    },
+    "products": {
+      "title": "Product Listing",
+      "description": "Produce available in marketplace",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Product document ID" },
+        "farmerUid": { "type": "string", "description": "Farmer UID" },
+        "farmerName": { "type": "string", "description": "Farmer name" },
+        "name": { "type": "string", "description": "Produce name" },
+        "category": { "type": "string", "description": "Crop category" },
+        "price": { "type": "number", "description": "Price per unit in NGN" },
+        "unit": { "type": "string", "description": "Unit of measure" },
+        "qty": { "type": "number", "description": "Available quantity" },
+        "sold": { "type": "number", "description": "Quantity sold" },
+        "status": { "type": "string", "enum": ["in_stock", "low_stock", "out_of_stock"], "description": "Inventory status" },
+        "farmState": { "type": "string", "description": "State of harvest" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["farmerUid", "name", "price", "unit", "qty"]
+    },
+    "orders": {
+      "title": "Order",
+      "description": "Produce order created by consumer",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Order document ID" },
+        "farmerUid": { "type": "string", "description": "Farmer UID" },
+        "buyerUid": { "type": "string", "description": "Buyer UID" },
+        "buyerName": { "type": "string", "description": "Buyer display name" },
+        "buyerPhone": { "type": "string", "description": "Buyer phone" },
+        "buyerLocation": { "type": "string", "description": "Delivery destination" },
+        "product": { "type": "string", "description": "Summary product description" },
+        "amount": { "type": "number", "description": "Total payment amount" },
+        "paymentMethod": { "type": "string", "enum": ["card", "bank", "ussd", "paystack"], "description": "Payment channel" },
+        "paymentReference": { "type": "string", "description": "Paystack transaction reference" },
+        "status": { "type": "string", "enum": ["new", "dispatched", "delivered"], "description": "Order fulfillment status" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Order timestamp" }
+      },
+      "required": ["farmerUid", "buyerUid", "amount", "status"]
+    },
+    "planting_calendars": {
+      "title": "Planting Calendar",
+      "description": "Farmer crop schedule and tasks",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Schedule ID" },
+        "uid": { "type": "string", "description": "Farmer UID" },
+        "crop": { "type": "string", "description": "Crop name" },
+        "status": { "type": "string", "description": "Schedule progress status" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last updated" }
+      },
+      "required": ["uid"]
+    },
+    "carts": {
+      "title": "Cart Item",
+      "description": "Item in user shopping cart",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Item document ID" },
+        "userId": { "type": "string", "description": "Buyer UID" },
+        "productId": { "type": "string", "description": "Product document ID" },
+        "name": { "type": "string", "description": "Product name" },
+        "farmerUid": { "type": "string", "description": "Farmer UID" },
+        "farmerName": { "type": "string", "description": "Farmer name" },
+        "price": { "type": "number", "description": "Price per unit" },
+        "unit": { "type": "string", "description": "Unit" },
+        "qty": { "type": "number", "description": "Item quantity in cart" },
+        "addedAt": { "type": "string", "format": "date-time", "description": "Time added to cart" }
+      },
+      "required": ["userId", "productId", "qty", "price"]
     }
   },
   "firestore": {
@@ -42,6 +113,22 @@
     "/user_actions/{actionId}": {
       "schema": "user_actions",
       "description": "Audit trails storing actions of registered or guest users"
+    },
+    "/products/{productId}": {
+      "schema": "products",
+      "description": "Farmer listings on marketplace"
+    },
+    "/orders/{orderId}": {
+      "schema": "orders",
+      "description": "Orders placed by consumers"
+    },
+    "/planting_calendars/{scheduleId}": {
+      "schema": "planting_calendars",
+      "description": "Planting schedules customized for farmers"
+    },
+    "/carts/{cartItemId}": {
+      "schema": "carts",
+      "description": "Items in consumer carts"
     }
   }
 }
